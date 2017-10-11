@@ -264,8 +264,6 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=123)
     return parser.parse_args()
 
-args = parse_args()
-
 
 # --
 # Initialize

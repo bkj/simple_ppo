@@ -78,18 +78,17 @@ def set_seeds(seed):
 
 class RolloutGenerator(object):
     
-    def __init__(self, env, policy_net, steps_per_batch, total_steps):
+    def __init__(self, env, policy_net, steps_per_batch):
         
         self.env = env
         self.policy_net = policy_net
         self.steps_per_batch = steps_per_batch
         
-        self.total_step = 0
-        self.total_steps = total_steps
+        self.steps_so_far = 0
         
         # self.running_state = RunMeanStd((policy_net.n_inputs,), clip=5.0)
     
-    def _next(self):
+    def next(self):
         """ yield a batch of experiences """
         
         batch = []
@@ -117,16 +116,10 @@ class RolloutGenerator(object):
             batch.append(episode)
             batch_steps += len(episode)
         
-        return batch, batch_steps
-    
-    def next(self):
-        """ Iterate, until number of steps is exceeed """
-        if self.total_step < self.total_steps:
-            batch, batch_steps = self._next()
-            self.total_step += batch_steps
-            return batch
-        else:
-            return None
+        self.steps_so_far += batch_steps
+        
+        return batch
+
 
 # --
 # Networks
@@ -208,7 +201,7 @@ class TrainBatch(object):
         self.n_episodes = self.is_dones.sum()
         self.total_reward = self.rewards.sum()
         
-    def compute_targets(self, value_net, gamma=0.99, lam=0.95):
+    def compute_targets(self, value_net, advantage_gamma, advantage_lambda):
         """ compute targets for value function """
         
         value_predictions = value_net(Variable(self.states))
@@ -219,8 +212,8 @@ class TrainBatch(object):
         prev_advantage = 0
         for i in reversed(range(self.rewards.size(0))):
             nonterminal = 1 - self.is_dones[i]
-            delta = self.rewards[i] + gamma * prev_value * nonterminal - value_predictions.data[i]
-            self.advantages[i] = delta + gamma * lam * prev_advantage * nonterminal
+            delta = self.rewards[i] + advantage_gamma * prev_value * nonterminal - value_predictions.data[i]
+            self.advantages[i] = delta + advantage_gamma * advantage_lambda * prev_advantage * nonterminal
             prev_value = value_predictions.data[i]
             prev_advantage = self.advantages[i]
         
@@ -248,21 +241,25 @@ class TrainBatch(object):
 # Params
 
 def parse_args():
+    """ parameters mimic openai/baselines """
     parser = argparse.ArgumentParser()
-    parser.add_argument('--env', type=str, default='Reacher-v1')
+    parser.add_argument('--env', type=str, default='Hopper-v1')
     
-    parser.add_argument('--total-steps', type=int, default=25000)
+    parser.add_argument('--total-steps', type=int, default=int(1e6))
     parser.add_argument('--steps-per-batch', type=int, default=2048)
     parser.add_argument('--epochs-per-batch', type=int, default=10)
     parser.add_argument('--batch-size', type=int, default=64)
     
-    parser.add_argument('--clip-eps', type=float, default=0.2)
+    parser.add_argument("--advantage-gamma", type=float, default=0.99)
+    parser.add_argument("--advantage-lambda", type=float, default=0.95)
     
+    parser.add_argument('--clip-eps', type=float, default=0.2)
     parser.add_argument('--adam-eps', type=float, default=1e-5)
     parser.add_argument('--adam-lr', type=float, default=3e-4)
     
     parser.add_argument('--seed', type=int, default=123)
     return parser.parse_args()
+
 
 
 # --
@@ -289,17 +286,21 @@ opt_value = torch.optim.Adam(value_net.parameters(), lr=args.adam_lr, eps=args.a
 
 set_seeds(args.seed)
 
-rollout_generator = RolloutGenerator(env, policy_net, args.steps_per_batch, args.total_steps)
-
+rollout_generator = RolloutGenerator(env, policy_net, args.steps_per_batch)
 for batch_index in itertools.count(0):
     
     # Compute rollouts
-    batch = rollout_generator.next()
-    if not batch:
+    if rollout_generator.steps_so_far > self.total_steps:
         break
     
+    batch = rollout_generator.next()
+    
     train_batch = TrainBatch(batch)
-    train_batch.compute_targets(value_net)
+    train_batch.compute_targets(
+        value_net, 
+        advantage_gamma=args.advantage_gamma, 
+        advantage_lambda=args.advantage_lambda
+    )
     # Log performance
     for episode_index in range(len(batch)):
         print(json.dumps({

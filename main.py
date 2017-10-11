@@ -12,6 +12,8 @@ import json
 import argparse
 import itertools
 import numpy as np
+from time import time
+from collections import OrderedDict
 
 import torch
 from torch import nn
@@ -34,44 +36,44 @@ def set_seeds(seed):
     _ = torch.cuda.manual_seed(seed)
 
 
-# class RunMeanStd(object):
-#     # Is this right?
-#     def __init__(self, shape, clip=5.0):
-#         self._n = 0
-#         self._M = np.zeros(shape)
-#         self._S = np.zeros(shape)
+class RunMeanStd(object):
+    # Is this right?
+    def __init__(self, shape, clip=5.0):
+        self._n = 0
+        self._M = np.zeros(shape)
+        self._S = np.zeros(shape)
         
-#         self.clip = clip
+        self.clip = clip
         
-#     def __call__(self, x, update=True):
-#         if update:
-#             self.__push(x)
+    def __call__(self, x, update=True):
+        if update:
+            self.__push(x)
         
-#         x -= self.mean
-#         x /= (self.std + 1e-8)
-#         return np.clip(x, -self.clip, self.clip)
+        x -= self.mean
+        x /= (self.std + 1e-8)
+        return np.clip(x, -self.clip, self.clip)
     
-#     def __push(self, x):
-#         x = np.asarray(x)
-#         assert x.shape == self._M.shape
-#         self._n += 1
-#         if self._n == 1:
-#             self._M[...] = x
-#         else:
-#             prev_m = self._M.copy()
-#             self._M[...] += (x - prev_m) / self._n
-#             self._S[...] += (x - prev_m) * (x - self._M)
+    def __push(self, x):
+        x = np.asarray(x)
+        assert x.shape == self._M.shape
+        self._n += 1
+        if self._n == 1:
+            self._M[...] = x
+        else:
+            prev_m = self._M.copy()
+            self._M[...] += (x - prev_m) / self._n
+            self._S[...] += (x - prev_m) * (x - self._M)
     
-#     @property
-#     def mean(self):
-#         return self._M
+    @property
+    def mean(self):
+        return self._M
 
-#     @property
-#     def std(self):
-#         if self._n > 1:
-#             return np.sqrt(self._S / (self._n - 1))
-#         else:
-#             return np.abs(self._M)
+    @property
+    def std(self):
+        if self._n > 1:
+            return np.sqrt(self._S / (self._n - 1))
+        else:
+            return np.abs(self._M)
 
 # --
 # Environment
@@ -286,11 +288,14 @@ opt_value = torch.optim.Adam(value_net.parameters(), lr=args.adam_lr, eps=args.a
 
 set_seeds(args.seed)
 
+start_time = time()
 rollout_generator = RolloutGenerator(env, policy_net, args.steps_per_batch)
 for batch_index in itertools.count(0):
     
-    # Compute rollouts
-    if rollout_generator.steps_so_far > self.total_steps:
+    # --
+    # Simulation
+    
+    if rollout_generator.steps_so_far > args.total_steps:
         break
     
     batch = rollout_generator.next()
@@ -298,25 +303,34 @@ for batch_index in itertools.count(0):
     train_batch = TrainBatch(batch)
     train_batch.compute_targets(
         value_net, 
-        advantage_gamma=args.advantage_gamma, 
+        advantage_gamma=args.advantage_gamma,
         advantage_lambda=args.advantage_lambda
     )
-    # Log performance
-    for episode_index in range(len(batch)):
-        print(json.dumps({
-            "batch_index" : batch_index,
-            "episode_index" : episode_index,
-            "episode_length" : len(batch[episode_index]),
-            "reward" : sum([r['reward'] for r in batch[episode_index]]),
-        }))
-    sys.stdout.flush()
-    print(json.dumps({
-        "batch_index" : batch_index,
-        "n_episodes" : train_batch.n_episodes,
-        "avg_reward" : train_batch.total_reward / train_batch.n_episodes
-    }), file=sys.stderr)
     
-    # Update model
+    # --
+    # Logging
+    
+    for episode_index in range(len(batch)):
+        print(json.dumps(OrderedDict([
+            ("elapsed_time", time() - start_time),
+            ("n_steps", rollout_generator.steps_so_far),
+            ("batch_index", batch_index),
+            ("episode_index", episode_index),
+            ("episode_length", len(batch[episode_index])),
+            ("reward", sum([r['reward'] for r in batch[episode_index]])),
+        ])))
+    sys.stdout.flush()
+    print(json.dumps(OrderedDict([
+        ("elapsed_time", time() - start_time),
+        ("n_steps", rollout_generator.steps_so_far),
+        ("batch_index", batch_index),
+        ("n_episodes", train_batch.n_episodes),
+        ("avg_reward", train_batch.total_reward / train_batch.n_episodes),
+    ])), file=sys.stderr)
+    
+    # --
+    # Learning
+    
     copy_model(policy_net, old_policy_net)
     
     for epoch in range(args.epochs_per_batch):

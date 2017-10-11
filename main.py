@@ -6,6 +6,9 @@
     # !! Add entropy penalty to loss
 """
 
+from __future__ import print_function
+
+import sys
 import gym
 import json
 import argparse
@@ -329,8 +332,9 @@ for batch_index in itertools.count(0):
             opt_policy.step()
     
     # Logging
-    print {
+    print(json.dumps({
         "batch_index" : batch_index,
         "n_episodes" : train_batch.n_episodes,
         "avg_reward" : train_batch.total_reward / train_batch.n_episodes
-    }
+    }))
+    sys.stdout.flush()

@@ -2,8 +2,6 @@
 
 """
     main.py
-    
-    # !! Add entropy penalty to loss
 """
 
 from __future__ import print_function
@@ -36,43 +34,44 @@ def set_seeds(seed):
     _ = torch.cuda.manual_seed(seed)
 
 
-class RunMeanStd(object):
-    def __init__(self, shape, clip=5.0):
-        self._n = 0
-        self._M = np.zeros(shape)
-        self._S = np.zeros(shape)
+# class RunMeanStd(object):
+#     # Is this right?
+#     def __init__(self, shape, clip=5.0):
+#         self._n = 0
+#         self._M = np.zeros(shape)
+#         self._S = np.zeros(shape)
         
-        self.clip = clip
+#         self.clip = clip
         
-    def __call__(self, x, update=True):
-        if update:
-            self.__push(x)
+#     def __call__(self, x, update=True):
+#         if update:
+#             self.__push(x)
         
-        x -= self.mean
-        x /= self.std + 1e-8
-        return np.clip(x, -self.clip, self.clip)
+#         x -= self.mean
+#         x /= (self.std + 1e-8)
+#         return np.clip(x, -self.clip, self.clip)
     
-    def __push(self, x):
-        x = np.asarray(x)
-        assert x.shape == self._M.shape
-        self._n += 1
-        if self._n == 1:
-            self._M[...] = x
-        else:
-            prev_m = self._M.copy()
-            self._M[...] += (x - prev_m) / self._n
-            self._S[...] += (x - prev_m) * (x - self._M)
+#     def __push(self, x):
+#         x = np.asarray(x)
+#         assert x.shape == self._M.shape
+#         self._n += 1
+#         if self._n == 1:
+#             self._M[...] = x
+#         else:
+#             prev_m = self._M.copy()
+#             self._M[...] += (x - prev_m) / self._n
+#             self._S[...] += (x - prev_m) * (x - self._M)
     
-    @property
-    def mean(self):
-        return self._M
+#     @property
+#     def mean(self):
+#         return self._M
 
-    @property
-    def std(self):
-        if self._n > 1:
-            return np.sqrt(self._S / (self._n - 1))
-        else:
-            return np.abs(self._M)
+#     @property
+#     def std(self):
+#         if self._n > 1:
+#             return np.sqrt(self._S / (self._n - 1))
+#         else:
+#             return np.abs(self._M)
 
 # --
 # Environment
@@ -88,7 +87,7 @@ class RolloutGenerator(object):
         self.total_step = 0
         self.total_steps = total_steps
         
-        self.running_state = RunMeanStd((policy_net.n_inputs,), clip=5.0)
+        # self.running_state = RunMeanStd((policy_net.n_inputs,), clip=5.0)
     
     def _next(self):
         """ yield a batch of experiences """
@@ -97,7 +96,8 @@ class RolloutGenerator(object):
         
         batch_steps = 0
         while batch_steps < self.steps_per_batch:
-            state = self.running_state(env.reset())
+            state = env.reset()
+            # state = self.running_state(state)
             
             episode = []
             is_done = False
@@ -105,13 +105,12 @@ class RolloutGenerator(object):
                 action = policy_net.sample_action(state)
                 
                 next_state, reward, is_done, _ = env.step(action)
-                next_state = self.running_state(next_state)
+                # next_state = self.running_state(next_state)
                 episode.append({
                     "state" : state,
                     "action" : action,
                     "is_done" : is_done,
-                    "reward" : reward,
-                    "next_state" : next_state,
+                    "reward" : reward
                 })
                 state = next_state
             
@@ -147,8 +146,8 @@ class ValueNetwork(nn.Module):
         )
         
         self.fc1 = nn.Linear(hidden_dim, n_outputs)
-        self.fc1.weight.data.mul_(0.1)
-        self.fc1.bias.data.mul_(0.0)
+        self.fc1.weight.data.mul_(0.1) # !!
+        self.fc1.bias.data.mul_(0.0) # !!
     
     def forward(self, x):
         x = self.value_fn(x)
@@ -171,8 +170,8 @@ class NormalPolicyNetwork(nn.Module):
         )
         
         self.action_mean = nn.Linear(hidden_dim, n_outputs)
-        self.action_mean.weight.data.mul_(0.1)
-        self.action_mean.bias.data.mul_(0.0)
+        self.action_mean.weight.data.mul_(0.1) # !!
+        self.action_mean.bias.data.mul_(0.0) # !!
         
         self.action_log_std = nn.Parameter(torch.zeros(1, n_outputs))
     
@@ -205,12 +204,11 @@ class TrainBatch(object):
         self.actions     = torch.from_numpy(np.vstack([[e['action'] for e in episode] for episode in batch]))
         self.is_dones    = torch.from_numpy(np.hstack([[e['is_done'] for e in episode] for episode in batch]).astype('int'))
         self.rewards     = torch.from_numpy(np.hstack([[e['reward'] for e in episode] for episode in batch]))
-        self.next_states = torch.from_numpy(np.vstack([[e['next_state'] for e in episode] for episode in batch]))
         
         self.n_episodes = self.is_dones.sum()
         self.total_reward = self.rewards.sum()
         
-    def compute_targets(self, value_net, gamma=0.99, tau=0.95):
+    def compute_targets(self, value_net, gamma=0.99, lam=0.95):
         """ compute targets for value function """
         
         value_predictions = value_net(Variable(self.states))
@@ -222,16 +220,16 @@ class TrainBatch(object):
         for i in reversed(range(self.rewards.size(0))):
             nonterminal = 1 - self.is_dones[i]
             delta = self.rewards[i] + gamma * prev_value * nonterminal - value_predictions.data[i]
-            self.advantages[i] = delta + gamma * tau * prev_advantage * nonterminal
+            self.advantages[i] = delta + gamma * lam * prev_advantage * nonterminal
             prev_value = value_predictions.data[i]
             prev_advantage = self.advantages[i]
         
         self.value_targets = self.advantages + value_predictions.data
     
-    def iterate(self, batch_size=64):
+    def iterate(self, batch_size=64, seed=0):
         if batch_size > 0:
-            idx = torch.LongTensor(np.random.RandomState(0).permutation(self.states.size(0)))
-            for chunk in torch.chunk(idx, 1):
+            idx = torch.LongTensor(np.random.RandomState(seed).permutation(self.states.size(0)))
+            for chunk in torch.chunk(idx, idx.size(0) // batch_size):
                 yield {
                     "states" : Variable(self.states[chunk]),
                     "actions" : Variable(self.actions[chunk]),
@@ -251,14 +249,17 @@ class TrainBatch(object):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--env', type=str, default='Hopper-v1')
+    parser.add_argument('--env', type=str, default='Reacher-v1')
     
-    parser.add_argument('--total-steps', type=int, default=int(1e6))
+    parser.add_argument('--total-steps', type=int, default=25000)
     parser.add_argument('--steps-per-batch', type=int, default=2048)
-    parser.add_argument('--epochs-per-batch', type=int, default=1)
-    parser.add_argument('--batch-size', type=int, default=-1)
+    parser.add_argument('--epochs-per-batch', type=int, default=10)
+    parser.add_argument('--batch-size', type=int, default=64)
     
-    parser.add_argument('--clip-epsilon', type=float, default=0.2)
+    parser.add_argument('--clip-eps', type=float, default=0.2)
+    
+    parser.add_argument('--adam-eps', type=float, default=1e-5)
+    parser.add_argument('--adam-lr', type=float, default=3e-4)
     
     parser.add_argument('--seed', type=int, default=123)
     return parser.parse_args()
@@ -282,8 +283,8 @@ policy_net, old_policy_net = [NormalPolicyNetwork(
 ) for _ in range(2)]
 copy_model(policy_net, old_policy_net)
 
-opt_policy = torch.optim.Adam(policy_net.parameters(), lr=0.001)
-opt_value = torch.optim.Adam(value_net.parameters(), lr=0.001)
+opt_policy = torch.optim.Adam(policy_net.parameters(), lr=args.adam_lr, eps=args.adam_eps)
+opt_value = torch.optim.Adam(value_net.parameters(), lr=args.adam_lr, eps=args.adam_eps)
 
 # --
 # Run
@@ -301,9 +302,26 @@ for batch_index in itertools.count(0):
     
     train_batch = TrainBatch(batch)
     train_batch.compute_targets(value_net)
+    # Log performance
+    for episode_index in range(len(batch)):
+        print(json.dumps({
+            "batch_index" : batch_index,
+            "episode_index" : episode_index,
+            "episode_length" : len(batch[episode_index]),
+            "reward" : sum([r['reward'] for r in batch[episode_index]]),
+        }))
+    sys.stdout.flush()
+    print(json.dumps({
+        "batch_index" : batch_index,
+        "n_episodes" : train_batch.n_episodes,
+        "avg_reward" : train_batch.total_reward / train_batch.n_episodes
+    }), file=sys.stderr)
     
-    for _ in range(args.epochs_per_batch):
-        minibatch_generator = train_batch.iterate(batch_size=args.batch_size)
+    # Update model
+    copy_model(policy_net, old_policy_net)
+    
+    for epoch in range(args.epochs_per_batch):
+        minibatch_generator = train_batch.iterate(batch_size=args.batch_size, seed=(epoch, batch_index))
         for minibatch_idx, minibatch in enumerate(minibatch_generator):
             
             # Update value function
@@ -320,21 +338,12 @@ for batch_index in itertools.count(0):
             old_log_prob = old_policy_net.log_prob(minibatch['actions'], minibatch['states'])
             ratio = torch.exp(log_prob - old_log_prob)
             
-            if minibatch_idx == 0:
-                copy_model(policy_net, old_policy_net)
-            
             advantages_normed = (minibatch['advantages'] - minibatch['advantages'].mean()) / minibatch['advantages'].std()
             surr1 = ratio * advantages_normed
-            surr2 = torch.clamp(ratio, 1 - args.clip_epsilon, 1 + args.clip_epsilon) * advantages_normed
+            surr2 = torch.clamp(ratio, 1 - args.clip_eps, 1 + args.clip_eps) * advantages_normed
             policy_surr = -torch.min(surr1, surr2).mean()
+            
             policy_surr.backward()
             torch.nn.utils.clip_grad_norm(policy_net.parameters(), 40)
             opt_policy.step()
     
-    # Logging
-    print(json.dumps({
-        "batch_index" : batch_index,
-        "n_episodes" : train_batch.n_episodes,
-        "avg_reward" : train_batch.total_reward / train_batch.n_episodes
-    }))
-    sys.stdout.flush()

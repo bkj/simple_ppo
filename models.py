@@ -13,6 +13,9 @@ from torch.autograd import Variable
 
 torch.set_default_tensor_type('torch.DoubleTensor')
 
+# --
+# Value networks
+
 class ValueNetwork(nn.Module):
     
     def __init__(self, n_inputs, n_outputs=1, hidden_dim=64, adam_lr=None, adam_eps=None):
@@ -47,8 +50,37 @@ class ValueNetwork(nn.Module):
         
         self.opt.step()
 
+# --
+# Policy networks
 
-class NormalPolicyNetwork(nn.Module):
+class PolicyNetworkMixin(object):
+    def backup(self):
+        state_dict = self.state_dict()
+        for k in state_dict.keys():
+            if '_old.' in k:
+                del state_dict[k]
+        
+        self._old.load_state_dict(state_dict)
+    
+    def step(self, states, actions, advantages):
+        self.opt.zero_grad()
+        
+        log_prob = self.log_prob(actions, states)
+        old_log_prob = self._old.log_prob(actions, states)
+        ratio = torch.exp(log_prob - old_log_prob)
+        
+        advantages_normed = (advantages - advantages.mean()) / advantages.std()
+        surr1 = ratio * advantages_normed
+        surr2 = torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps) * advantages_normed
+        policy_surr = -torch.min(surr1, surr2).mean()
+        
+        policy_surr.backward()
+        torch.nn.utils.clip_grad_norm(self.parameters(), 40)
+        
+        self.opt.step()
+
+
+class NormalPolicyNetwork(nn.Module, PolicyNetworkMixin):
     
     def __init__(self, n_inputs, n_outputs, hidden_dim=64, adam_lr=None, adam_eps=None, clip_eps=None):
         super(NormalPolicyNetwork, self).__init__()
@@ -75,47 +107,22 @@ class NormalPolicyNetwork(nn.Module):
             
             self._old = NormalPolicyNetwork(n_inputs, n_outputs)
     
-    def forward(self, x):
+    def _forward(self, x):
         x = self.policy_fn(x)
         action_mean = self.action_mean(x)
         return action_mean, self.action_log_std.expand_as(action_mean)
     
     def sample_action(self, state):
         state = Variable(torch.from_numpy(state).unsqueeze(0))
-        action_mean, action_log_std = self(state)
+        action_mean, action_log_std = self._forward(state)
         action = torch.normal(action_mean, torch.exp(action_log_std))
         return action.data.numpy().squeeze(axis=0)
     
     def log_prob(self, action, state):
-        action_mean, action_log_std = self(state)
+        action_mean, action_log_std = self._forward(state)
         return (
             - 0.5 * (action - action_mean) ** 2 / (torch.exp(action_log_std) ** 2)
             - 0.5 * np.log(2 * np.pi)
             - action_log_std
         ).sum(1)
-    
-    def backup(self):
-        state_dict = self.state_dict()
-        for k in state_dict.keys():
-            if '_old.' in k:
-                del state_dict[k]
-        
-        self._old.load_state_dict(state_dict)
-    
-    def step(self, states, actions, advantages):
-        self.opt.zero_grad()
-        
-        log_prob = self.log_prob(actions, states)
-        old_log_prob = self._old.log_prob(actions, states)
-        ratio = torch.exp(log_prob - old_log_prob)
-        
-        advantages_normed = (advantages - advantages.mean()) / advantages.std()
-        surr1 = ratio * advantages_normed
-        surr2 = torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps) * advantages_normed
-        policy_surr = -torch.min(surr1, surr2).mean()
-        
-        policy_surr.backward()
-        torch.nn.utils.clip_grad_norm(self.parameters(), 40)
-        
-        self.opt.step()
 

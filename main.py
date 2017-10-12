@@ -102,13 +102,11 @@ set_seeds(args.seed)
 
 start_time = time()
 for batch_index in itertools.count(0):
-    
-    # --
-    # Do rollouts
-    
     if roll_gen.steps_so_far > args.total_steps:
         break
     
+    # --
+    # Sample a batch of rollouts
     roll_gen.next()
     
     # --

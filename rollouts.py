@@ -46,21 +46,21 @@ class RunningStats(object):
 
 class RolloutGenerator(object):
     
-    def __init__(self, env, policy_net, value_net, steps_per_batch, advantage_gamma, advantage_lambda, rms=True):
+    def __init__(self, env, ppo, steps_per_batch, advantage_gamma, advantage_lambda, rms=True):
         
         self.env = env
-        self.policy_net = policy_net
-        self.value_net = value_net
-        
+        self.ppo = ppo
         self.steps_per_batch = steps_per_batch
         self.advantage_gamma = advantage_gamma
         self.advantage_lambda = advantage_lambda
         
-        self.steps_so_far = 0
-        
         self.rms = rms
         if rms:
-            self.running_stats = RunningStats((policy_net.n_inputs,), clip=5.0)
+            self.running_stats = RunningStats((ppo.policy.n_inputs,), clip=5.0)
+        
+        self.step_index = 0
+        self.episode_index = 0
+        self.batch_index = 0
     
     def _do_rollout(self):
         """ yield a batch of experiences """
@@ -76,7 +76,7 @@ class RolloutGenerator(object):
             episode = []
             is_done = False
             while not is_done:
-                action = self.policy_net.sample_action(state)
+                action = self.ppo.sample_action(state)
                 
                 next_state, reward, is_done, _ = self.env.step(action)
                 if self.rms:
@@ -86,21 +86,26 @@ class RolloutGenerator(object):
                     "state" : state,
                     "action" : action,
                     "is_done" : is_done,
-                    "reward" : reward
+                    "reward" : reward,
+                    "step_index" : self.step_index,
+                    "episode_index" : self.episode_index,
+                    "batch_index" : self.batch_index,
                 })
                 state = next_state
             
             batch.append(episode)
             batch_steps += len(episode)
+            self.episode_index += 1
         
-        self.steps_so_far += batch_steps
+        self.batch_index += 1
+        self.step_index += batch_steps
         
         return batch
     
     def _compute_targets(self, states, actions, is_dones, rewards):
         """ compute targets for value function """
         
-        value_predictions = self.value_net(Variable(states))
+        value_predictions = self.ppo.predict_value(Variable(states))
         
         advantages = torch.Tensor(states.size(0))
         
@@ -151,7 +156,7 @@ class RolloutGenerator(object):
             }
     
     @property
-    def n_episodes(self):
+    def episodes_in_batch(self):
         return self.tbatch['is_dones'].sum()
     
     @property

@@ -14,12 +14,37 @@ from torch.autograd import Variable
 torch.set_default_tensor_type('torch.DoubleTensor')
 
 # --
+# PPO Wrapper
+
+class PPOWrapper(object):
+    
+    def __init__(self, value, policy):
+        self.value = value
+        self.policy = policy
+    
+    def predict_value(self, *args, **kwargs):
+        return self.value.predict_value(*args, **kwargs)
+    
+    def backup(self):
+        self.policy.backup()
+    
+    def sample_action(self, *args, **kwargs):
+        return self.policy.sample_action(*args, **kwargs)
+    
+    def log_prob(self, *args, **kwargs):
+        return self.policy.log_prob(*args, **kwargs)
+    
+    def step(self, states, actions, value_targets, advantages):
+        self.value.step(states, value_targets)
+        self.policy.step(states, actions, advantages)
+
+# --
 # Value networks
 
-class ValueNetwork(nn.Module):
+class ValueMLP(nn.Module):
     
     def __init__(self, n_inputs, n_outputs=1, hidden_dim=64, adam_lr=None, adam_eps=None):
-        super(ValueNetwork, self).__init__()
+        super(ValueMLP, self).__init__()
         
         assert n_outputs == 1
         
@@ -37,14 +62,14 @@ class ValueNetwork(nn.Module):
         if adam_lr and adam_eps:
             self.opt = torch.optim.Adam(self.parameters(), lr=adam_lr, eps=adam_eps)
         
-    def forward(self, x):
+    def predict_value(self, x):
         x = self.value_fn(x)
         return self.fc1(x).squeeze()
     
     def step(self, states, value_targets):
         self.opt.zero_grad()
         
-        value_predictions = self(states).squeeze()
+        value_predictions = self.predict_value(states).squeeze()
         value_loss = ((value_predictions - value_targets) ** 2).mean()
         value_loss.backward()
         

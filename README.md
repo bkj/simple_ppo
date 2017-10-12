@@ -1,4 +1,4 @@
-# pytorch-ppo
+# simple_ppo
 
 Implementation of PPO in `pytorch`.
 

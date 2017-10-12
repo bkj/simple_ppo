@@ -2,6 +2,11 @@
 
 """
     main.py
+    
+    !! May want to take a look at how `RunningStats` are computed
+    !! Also, not sure about gradient clipping
+    !! Also, should look into initializations
+    !! Also, should implement clipping + learning rate annealing
 """
 
 from __future__ import print_function
@@ -36,51 +41,44 @@ def set_seeds(seed):
     _ = torch.cuda.manual_seed(seed)
 
 
-class RunMeanStd(object):
-    # Is this right?
-    def __init__(self, shape, clip=5.0):
-        self._n = 0
-        self._M = np.zeros(shape)
-        self._S = np.zeros(shape)
+class RunningStats(object):
+    def __init__(self, shape, clip=5.0, epsilon=1e-4):
         
+        self._sum = np.zeros(shape)
+        self._sumsq = np.zeros(shape)
+        self._count = epsilon
+        
+        self.shape = shape
         self.clip = clip
+        self.epsilon = epsilon
         
     def __call__(self, x, update=True):
         if update:
-            self.__push(x)
+            self.update(x)
         
         x -= self.mean
-        x /= (self.std + 1e-8)
+        x /= self.std
         return np.clip(x, -self.clip, self.clip)
     
-    def __push(self, x):
-        x = np.asarray(x)
-        assert x.shape == self._M.shape
-        self._n += 1
-        if self._n == 1:
-            self._M[...] = x
-        else:
-            prev_m = self._M.copy()
-            self._M[...] += (x - prev_m) / self._n
-            self._S[...] += (x - prev_m) * (x - self._M)
+    def update(self, x):
+        self._count += 1
+        self._sum += x
+        self._sumsq += (x ** 2)
     
     @property
     def mean(self):
-        return self._M
-
+        return self._sum / self._count
+    
     @property
     def std(self):
-        if self._n > 1:
-            return np.sqrt(self._S / (self._n - 1))
-        else:
-            return np.abs(self._M)
+        return np.sqrt(np.maximum((self._sumsq / self._count) - self.mean ** 2, self.epsilon))
 
 # --
 # Environment
 
 class RolloutGenerator(object):
     
-    def __init__(self, env, policy_net, steps_per_batch):
+    def __init__(self, env, policy_net, steps_per_batch, rms=True):
         
         self.env = env
         self.policy_net = policy_net
@@ -88,7 +86,9 @@ class RolloutGenerator(object):
         
         self.steps_so_far = 0
         
-        # self.running_state = RunMeanStd((policy_net.n_inputs,), clip=5.0)
+        self.rms = rms
+        if rms:
+            self.running_stats = RunningStats((policy_net.n_inputs,), clip=5.0)
     
     def next(self):
         """ yield a batch of experiences """
@@ -98,7 +98,8 @@ class RolloutGenerator(object):
         batch_steps = 0
         while batch_steps < self.steps_per_batch:
             state = env.reset()
-            # state = self.running_state(state)
+            if self.rms:
+                state = self.running_stats(state)
             
             episode = []
             is_done = False
@@ -106,7 +107,9 @@ class RolloutGenerator(object):
                 action = policy_net.sample_action(state)
                 
                 next_state, reward, is_done, _ = env.step(action)
-                # next_state = self.running_state(next_state)
+                if self.rms:
+                    next_state = self.running_stats(next_state)
+                
                 episode.append({
                     "state" : state,
                     "action" : action,
@@ -193,10 +196,10 @@ class NormalPolicyNetwork(nn.Module):
 class TrainBatch(object):
     
     def __init__(self, batch):
-        self.states      = torch.from_numpy(np.vstack([[e['state'] for e in episode] for episode in batch]))
-        self.actions     = torch.from_numpy(np.vstack([[e['action'] for e in episode] for episode in batch]))
-        self.is_dones    = torch.from_numpy(np.hstack([[e['is_done'] for e in episode] for episode in batch]).astype('int'))
-        self.rewards     = torch.from_numpy(np.hstack([[e['reward'] for e in episode] for episode in batch]))
+        self.states = torch.from_numpy(np.vstack([[e['state'] for e in episode] for episode in batch]))
+        self.actions = torch.from_numpy(np.vstack([[e['action'] for e in episode] for episode in batch]))
+        self.is_dones = torch.from_numpy(np.hstack([[e['is_done'] for e in episode] for episode in batch]).astype('int'))
+        self.rewards = torch.from_numpy(np.hstack([[e['reward'] for e in episode] for episode in batch]))
         
         self.n_episodes = self.is_dones.sum()
         self.total_reward = self.rewards.sum()
@@ -258,6 +261,8 @@ def parse_args():
     parser.add_argument('--adam-lr', type=float, default=3e-4)
     
     parser.add_argument('--seed', type=int, default=123)
+    
+    parser.add_argument('--rms', action="store_true")
     return parser.parse_args()
 
 
@@ -287,7 +292,7 @@ opt_value = torch.optim.Adam(value_net.parameters(), lr=args.adam_lr, eps=args.a
 set_seeds(args.seed)
 
 start_time = time()
-rollout_generator = RolloutGenerator(env, policy_net, args.steps_per_batch)
+rollout_generator = RolloutGenerator(env, policy_net, steps_per_batch=args.steps_per_batch, rms=args.rms)
 for batch_index in itertools.count(0):
     
     # --

@@ -14,7 +14,7 @@ from torch.autograd import Variable
 torch.set_default_tensor_type('torch.DoubleTensor')
 
 # --
-# PPO Wrapper
+# Helpers
 
 class PPOWrapper(object):
     
@@ -38,8 +38,18 @@ class PPOWrapper(object):
         self.value.step(states, value_targets)
         self.policy.step(states, actions, advantages)
 
+
+class BackupMixin(object):
+    def backup(self):
+        state_dict = self.state_dict()
+        for k in list(state_dict.keys()):
+            if '_old.' in k:
+                del state_dict[k]
+        
+        self._old.load_state_dict(state_dict)
+
 # --
-# Value networks
+# MLP Value + Policy networks (for mujoco)
 
 class ValueMLP(nn.Module):
     
@@ -75,37 +85,8 @@ class ValueMLP(nn.Module):
         
         self.opt.step()
 
-# --
-# Policy networks
 
-class PolicyNetworkMixin(object):
-    def backup(self):
-        state_dict = self.state_dict()
-        for k in list(state_dict.keys()):
-            if '_old.' in k:
-                del state_dict[k]
-        
-        self._old.load_state_dict(state_dict)
-    
-    def step(self, states, actions, advantages):
-        self.opt.zero_grad()
-        
-        log_prob = self.log_prob(actions, states)
-        old_log_prob = self._old.log_prob(actions, states)
-        ratio = torch.exp(log_prob - old_log_prob)
-        
-        advantages_normed = (advantages - advantages.mean()) / advantages.std()
-        surr1 = ratio * advantages_normed
-        surr2 = torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps) * advantages_normed
-        policy_surr = -torch.min(surr1, surr2).mean()
-        
-        policy_surr.backward()
-        torch.nn.utils.clip_grad_norm(self.parameters(), 40)
-        
-        self.opt.step()
-
-
-class NormalPolicyMLP(nn.Module, PolicyNetworkMixin):
+class NormalPolicyMLP(nn.Module, BackupMixin):
     
     def __init__(self, n_inputs, n_outputs, hidden_dim=64, adam_lr=None, adam_eps=None, clip_eps=None):
         super(NormalPolicyMLP, self).__init__()
@@ -150,12 +131,32 @@ class NormalPolicyMLP(nn.Module, PolicyNetworkMixin):
             - 0.5 * np.log(2 * np.pi)
             - action_log_std
         ).sum(1)
+    
+    def step(self, states, actions, advantages):
+        self.opt.zero_grad()
+        
+        log_prob = self.log_prob(actions, states)
+        old_log_prob = self._old.log_prob(actions, states)
+        ratio = torch.exp(log_prob - old_log_prob)
+        
+        advantages_normed = (advantages - advantages.mean()) / advantages.std()
+        surr1 = ratio * advantages_normed
+        surr2 = torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps) * advantages_normed
+        policy_surr = -torch.min(surr1, surr2).mean()
+        
+        policy_surr.backward()
+        torch.nn.utils.clip_grad_norm(self.parameters(), 40)
+        
+        self.opt.step()
 
 
-class CategoricalPolicyCNN(nn.Module, PolicyNetworkMixin):
+# --
+# CNN joint network (for atari)
+
+class AtariPPO(nn.Module, BackupMixin):
     
     def __init__(self, n_inputs, n_outputs, input_shape, adam_lr=None, adam_eps=None, clip_eps=None):
-        super(CategoricalPolicyCNN, self).__init__()
+        super(AtariPPO, self).__init__()
         
         self.n_inputs = n_inputs
         self.n_outputs = n_outputs
@@ -170,33 +171,61 @@ class CategoricalPolicyCNN(nn.Module, PolicyNetworkMixin):
         )
         
         self.conv_output_dim = self._compute_sizes(n_inputs, input_shape)
-        self.fc1 = nn.Linear(self.conv_output_dim, 512)
-        self.fc2 = nn.Linear(512, n_outputs)
+        self.fc = nn.Linear(self.conv_output_dim, 512)
+        
+        self.policy_fc = nn.Linear(512, n_outputs)
+        self.value_fc = nn.Linear(512, 1)
         
         if adam_lr and adam_eps:
             self.opt = torch.optim.Adam(self.parameters(), lr=adam_lr, eps=adam_eps)
             self.clip_eps = clip_eps
             
-            self._old = CategoricalPolicyCNN(n_inputs, n_outputs)
-
+            self._old = AtariPPO(n_inputs, n_outputs, input_shape)
+            
     def _compute_sizes(self, n_inputs, input_shape):
         tmp = Variable(torch.zeros((1, n_inputs) + input_shape), volatile=True)
         tmp = conv_layers(tmp)
         return tmp.view(tmp.size(0), -1).size(-1)
     
-    def _forward(self, x):
+    def forward(self, x):
         x = self.conv_layers(x)
         x = x.view(x.size(0), -1)
-        x = F.relu(self.fc1(x))
-        return self.fc2(x)
+        return F.relu(self.fc(x))
     
+    # Policy network
     def sample_action(self, state):
         state = Variable(torch.from_numpy(state).unsqueeze(0))
-        logits = self._forward(state)
+        logits = self.policy_fc(self(state))
         gumbel = (logits - torch.log(-torch.log(torch.rand(logits.size()))))
         return gumbel.max(1)[1]
     
     def log_prob(self, action, state):
-        logits = self._forward(state)
+        logits = self.policy_fc(self(state))
         return F.log_softmax(torch.FloatTensor(logits))[state]
+    
+    # Value network
+    def predict_value(self, x):
+        return self.value_fc(self(x)).squeeze()
+    
+    # Shared
+    def step(self, states, actions, value_targets, advantages):
+        self.opt.zero_grad()
+        
+        # Value network
+        value_predictions = self.predict_value(states).squeeze()
+        value_loss = ((value_predictions - value_targets) ** 2).mean()
+        
+        # Policy network
+        log_prob = self.log_prob(actions, states)
+        old_log_prob = self._old.log_prob(actions, states)
+        ratio = torch.exp(log_prob - old_log_prob)
+        
+        advantages_normed = (advantages - advantages.mean()) / advantages.std()
+        surr1 = ratio * advantages_normed
+        surr2 = torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps) * advantages_normed
+        policy_surr = -torch.min(surr1, surr2).mean()
+        
+        # Shared
+        (value_loss + policy_surr).backward()
+        self.opt.step()
 

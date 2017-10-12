@@ -110,25 +110,27 @@ while roll_gen.step_index < args.total_steps:
     
     # --
     # Logging
+
+    print(json.dumps(OrderedDict([
+        ("step_index",        roll_gen.step_index),
+        ("batch_index",       roll_gen.batch_index),
+        ("episode_index",     roll_gen.episode_index),
+        ("elapsed_time",      time() - start_time),
+        ("episodes_in_batch", roll_gen.episodes_in_batch),
+        ("avg_reward",        roll_gen.total_reward / roll_gen.episodes_in_batch),
+    ])), file=sys.stderr)
     
     for episode in roll_gen.batch:
         print(json.dumps(OrderedDict([
-            ("step_index", episode[0]['step_index']),
-            ("batch_index", episode[0]['batch_index']),
-            ("episode_index", episode[0]['episode_index']),
-            ("elapsed_time", time() - start_time),
+            ("step_index",     episode[0]['step_index']),
+            ("batch_index",    episode[0]['batch_index']),
+            ("episode_index",  episode[0]['episode_index']),
+            ("elapsed_time",   time() - start_time),
             ("episode_length", len(episode)),
-            ("reward", sum([r['reward'] for r in episode])),
+            ("reward",         sum([r['reward'] for r in episode])),
         ])))
+    
     sys.stdout.flush()
-    print(json.dumps(OrderedDict([
-        ("step_index", roll_gen.step_index),
-        ("batch_index", roll_gen.batch_index),
-        ("episode_index", roll_gen.episode_index),
-        ("elapsed_time", time() - start_time),
-        ("episodes_in_batch", roll_gen.episodes_in_batch),
-        ("avg_reward", roll_gen.total_reward / roll_gen.episodes_in_batch),
-    ])), file=sys.stderr)
     
     # --
     # Update model parameters

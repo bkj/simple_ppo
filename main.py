@@ -182,7 +182,7 @@ class NormalPolicyNetwork(nn.Module):
         state = Variable(torch.from_numpy(state).unsqueeze(0))
         action_mean, action_log_std = self(state)
         action = torch.normal(action_mean, torch.exp(action_log_std))
-        return action.data.numpy().squeeze()
+        return action.data.numpy().squeeze(axis=0)
     
     def log_prob(self, action, state):
         action_mean, action_log_std = self(state)

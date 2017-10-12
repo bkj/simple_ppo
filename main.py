@@ -183,13 +183,11 @@ class NormalPolicyNetwork(nn.Module):
     
     def log_prob(self, action, state):
         action_mean, action_log_std = self(state)
-        action_std = torch.exp(action_log_std)
-        
-        out = - 0.5 * (action - action_mean) ** 2 / (action_std ** 2)
-        out -= 0.5 * np.log(2 * np.pi)
-        out -= action_log_std
-        
-        return out.sum(1)
+        return (
+            - 0.5 * (action - action_mean) ** 2 / (torch.exp(action_log_std) ** 2)
+            - 0.5 * np.log(2 * np.pi)
+            - action_log_std
+        ).sum(1)
 
 
 class TrainBatch(object):

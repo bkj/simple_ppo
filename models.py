@@ -56,7 +56,7 @@ class ValueNetwork(nn.Module):
 class PolicyNetworkMixin(object):
     def backup(self):
         state_dict = self.state_dict()
-        for k in state_dict.keys():
+        for k in list(state_dict.keys()):
             if '_old.' in k:
                 del state_dict[k]
         
@@ -80,10 +80,10 @@ class PolicyNetworkMixin(object):
         self.opt.step()
 
 
-class NormalPolicyNetwork(nn.Module, PolicyNetworkMixin):
+class NormalPolicyMLP(nn.Module, PolicyNetworkMixin):
     
     def __init__(self, n_inputs, n_outputs, hidden_dim=64, adam_lr=None, adam_eps=None, clip_eps=None):
-        super(NormalPolicyNetwork, self).__init__()
+        super(NormalPolicyMLP, self).__init__()
         
         self.n_inputs = n_inputs
         self.n_outputs = n_outputs
@@ -105,7 +105,7 @@ class NormalPolicyNetwork(nn.Module, PolicyNetworkMixin):
             self.opt = torch.optim.Adam(self.parameters(), lr=adam_lr, eps=adam_eps)
             self.clip_eps = clip_eps
             
-            self._old = NormalPolicyNetwork(n_inputs, n_outputs)
+            self._old = NormalPolicyMLP(n_inputs, n_outputs)
     
     def _forward(self, x):
         x = self.policy_fn(x)
@@ -125,4 +125,53 @@ class NormalPolicyNetwork(nn.Module, PolicyNetworkMixin):
             - 0.5 * np.log(2 * np.pi)
             - action_log_std
         ).sum(1)
+
+
+class CategoricalPolicyCNN(nn.Module, PolicyNetworkMixin):
+    
+    def __init__(self, n_inputs, n_outputs, input_shape, adam_lr=None, adam_eps=None, clip_eps=None):
+        super(CategoricalPolicyCNN, self).__init__()
+        
+        self.n_inputs = n_inputs
+        self.n_outputs = n_outputs
+        
+        self.conv_layers = nn.Sequential(
+            nn.Conv2d(n_inputs, 32, kernel_size=(8, 8), stride=(4, 4)),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=(4, 4), stride=(2, 2)),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1)),
+            nn.ReLU(),
+        )
+        
+        self.conv_output_dim = self._compute_sizes(n_inputs, input_shape)
+        self.fc1 = nn.Linear(self.conv_output_dim, 512)
+        self.fc2 = nn.Linear(512, n_outputs)
+        
+        if adam_lr and adam_eps:
+            self.opt = torch.optim.Adam(self.parameters(), lr=adam_lr, eps=adam_eps)
+            self.clip_eps = clip_eps
+            
+            self._old = CategoricalPolicyCNN(n_inputs, n_outputs)
+
+    def _compute_sizes(self, n_inputs, input_shape):
+        tmp = Variable(torch.zeros((1, n_inputs) + input_shape), volatile=True)
+        tmp = conv_layers(tmp)
+        return tmp.view(tmp.size(0), -1).size(-1)
+    
+    def _forward(self, x):
+        x = self.conv_layers(x)
+        x = x.view(x.size(0), -1)
+        x = F.relu(self.fc1(x))
+        return self.fc2(x)
+    
+    def sample_action(self, state):
+        state = Variable(torch.from_numpy(state).unsqueeze(0))
+        logits = self._forward(state)
+        gumbel = (logits - torch.log(-torch.log(torch.rand(logits.size()))))
+        return gumbel.max(1)[1]
+    
+    def log_prob(self, action, state):
+        logits = self._forward(state)
+        return F.log_softmax(torch.FloatTensor(logits))[state]
 

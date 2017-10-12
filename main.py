@@ -25,7 +25,7 @@ from torch import nn
 from torch.autograd import Variable
 
 from rollouts import RolloutGenerator
-from models import ValueNetwork, NormalPolicyNetwork
+from models import ValueNetwork, NormalPolicyMLP
 
 torch.set_default_tensor_type('torch.DoubleTensor')
 
@@ -77,7 +77,7 @@ value_net = ValueNetwork(
     adam_eps=args.adam_eps,
 )
 
-policy_net = NormalPolicyNetwork(
+policy_net = NormalPolicyMLP(
     n_inputs=env.observation_space.shape[0],
     n_outputs=env.action_space.shape[0],
     adam_lr=args.adam_lr,

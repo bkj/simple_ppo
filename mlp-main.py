@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-    main.py
+    mlp-main.py
     
     Todo:
         !! Take a look at how `RunningStats` are computed

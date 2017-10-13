@@ -91,8 +91,7 @@ class NormalPolicyMLP(nn.Module, BackupMixin):
     def __init__(self, n_inputs, n_outputs, hidden_dim=64, adam_lr=None, adam_eps=None, clip_eps=None):
         super(NormalPolicyMLP, self).__init__()
         
-        self.n_inputs = n_inputs
-        self.n_outputs = n_outputs
+        self.input_shape = (n_inputs,)
         
         self.policy_fn = nn.Sequential(
             nn.Linear(n_inputs, hidden_dim),
@@ -155,14 +154,13 @@ class NormalPolicyMLP(nn.Module, BackupMixin):
 
 class AtariPPO(nn.Module, BackupMixin):
     
-    def __init__(self, n_inputs, n_outputs, input_shape, adam_lr=None, adam_eps=None, clip_eps=None):
+    def __init__(self, input_channels, input_height, input_width, n_outputs, adam_lr=None, adam_eps=None, clip_eps=None):
         super(AtariPPO, self).__init__()
         
-        self.n_inputs = n_inputs
-        self.n_outputs = n_outputs
+        self.input_shape = (input_channels, input_height, input_width)
         
         self.conv_layers = nn.Sequential(
-            nn.Conv2d(n_inputs, 32, kernel_size=(8, 8), stride=(4, 4)),
+            nn.Conv2d(input_channels, 32, kernel_size=(8, 8), stride=(4, 4)),
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=(4, 4), stride=(2, 2)),
             nn.ReLU(),
@@ -170,7 +168,7 @@ class AtariPPO(nn.Module, BackupMixin):
             nn.ReLU(),
         )
         
-        self.conv_output_dim = self._compute_sizes(n_inputs, input_shape)
+        self.conv_output_dim = self._compute_sizes(input_channels, input_height, input_width)
         self.fc = nn.Linear(self.conv_output_dim, 512)
         
         self.policy_fc = nn.Linear(512, n_outputs)
@@ -180,10 +178,10 @@ class AtariPPO(nn.Module, BackupMixin):
             self.opt = torch.optim.Adam(self.parameters(), lr=adam_lr, eps=adam_eps)
             self.clip_eps = clip_eps
             
-            self._old = AtariPPO(n_inputs, n_outputs, input_shape)
+            self._old = AtariPPO(input_channels, input_height, input_width, n_outputs)
             
-    def _compute_sizes(self, n_inputs, input_shape):
-        tmp = Variable(torch.zeros((1, n_inputs) + input_shape), volatile=True)
+    def _compute_sizes(self, input_channels, input_height, input_width):
+        tmp = Variable(torch.zeros((1, input_channels, input_height, input_width)), volatile=True)
         tmp = conv_layers(tmp)
         return tmp.view(tmp.size(0), -1).size(-1)
     

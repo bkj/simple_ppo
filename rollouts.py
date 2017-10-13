@@ -56,7 +56,7 @@ class RolloutGenerator(object):
         
         self.rms = rms
         if rms:
-            self.running_stats = RunningStats((ppo.policy.n_inputs,), clip=5.0)
+            self.running_stats = RunningStats(ppo.policy.input_shape, clip=5.0)
         
         self.step_index = 0
         self.episode_index = 0

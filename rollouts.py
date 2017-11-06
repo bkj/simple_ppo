@@ -46,7 +46,7 @@ class RunningStats(object):
 
 class RolloutGenerator(object):
     
-    def __init__(self, env, ppo, steps_per_batch, advantage_gamma, advantage_lambda, rms=True):
+    def __init__(self, env, ppo, steps_per_batch, advantage_gamma, advantage_lambda, rms=True, cuda=False):
         
         self.env = env
         self.ppo = ppo
@@ -57,6 +57,8 @@ class RolloutGenerator(object):
         self.rms = rms
         if rms:
             self.running_stats = RunningStats(ppo.policy.input_shape, clip=5.0)
+        
+        self.cuda = cuda
         
         self.step_index = 0
         self.episode_index = 0
@@ -70,6 +72,10 @@ class RolloutGenerator(object):
         batch_steps = 0
         while batch_steps < self.steps_per_batch:
             state = self.env.reset()
+            # >>
+            # !! ATARI
+            state = state.astype('float') / 255 - 0.5
+            # << 
             if self.rms:
                 state = self.running_stats(state)
             
@@ -77,8 +83,10 @@ class RolloutGenerator(object):
             is_done = False
             while not is_done:
                 action = self.ppo.sample_action(state)
-                
                 next_state, reward, is_done, _ = self.env.step(action)
+                # >>
+                next_state = state.astype('float') / 255 - 0.5
+                # << 
                 if self.rms:
                     next_state = self.running_stats(next_state)
                 
@@ -106,8 +114,11 @@ class RolloutGenerator(object):
         """ compute targets for value function """
         
         value_predictions = self.ppo.predict_value(Variable(states))
-        
         advantages = torch.Tensor(states.size(0))
+        
+        if self.cuda:
+            value_predictions = value_predictions.cuda()
+            advantages = advantages.cuda()
         
         prev_value = 0
         prev_advantage = 0
@@ -134,12 +145,18 @@ class RolloutGenerator(object):
             "rewards"  : torch.from_numpy(np.hstack([[e['reward'] for e in episode] for episode in self.batch])),
         }
         
+        if self.cuda:
+            self.tbatch = dict(zip(self.tbatch.keys(), map(lambda x: x.cuda(), self.tbatch.values())))
+        
         # Predict value
         self.tbatch['value_targets'], self.tbatch['advantages'] = self._compute_targets(**self.tbatch)
     
     def iterate_batch(self, batch_size=64, seed=0):
         if batch_size > 0:
             idx = torch.LongTensor(np.random.RandomState(seed).permutation(self.n_steps))
+            if self.cuda:
+                idx = idx.cuda()
+            
             for chunk in torch.chunk(idx, idx.size(0) // batch_size):
                 yield {
                     "states" : Variable(self.tbatch['states'][chunk]),

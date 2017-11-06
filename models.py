@@ -9,9 +9,12 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn import Parameter
+from torch.nn import functional as F
 from torch.autograd import Variable
 
 torch.set_default_tensor_type('torch.DoubleTensor')
+
+from helpers import to_numpy
 
 # --
 # Helpers
@@ -121,7 +124,7 @@ class NormalPolicyMLP(nn.Module, BackupMixin):
         state = Variable(torch.from_numpy(state).unsqueeze(0))
         action_mean, action_log_std = self._forward(state)
         action = torch.normal(action_mean, torch.exp(action_log_std))
-        return action.data.numpy().squeeze(axis=0)
+        return to_numpy(action).squeeze(axis=0)
     
     def log_prob(self, action, state):
         action_mean, action_log_std = self._forward(state)
@@ -154,7 +157,9 @@ class NormalPolicyMLP(nn.Module, BackupMixin):
 
 class AtariPPO(nn.Module, BackupMixin):
     
-    def __init__(self, input_channels, input_height, input_width, n_outputs, adam_lr=None, adam_eps=None, clip_eps=None):
+    def __init__(self, input_channels, input_height, input_width, n_outputs, 
+        adam_lr=None, adam_eps=None, clip_eps=None, cuda=True):
+        
         super(AtariPPO, self).__init__()
         
         self.input_shape = (input_channels, input_height, input_width)
@@ -178,14 +183,17 @@ class AtariPPO(nn.Module, BackupMixin):
             self.opt = torch.optim.Adam(self.parameters(), lr=adam_lr, eps=adam_eps)
             self.clip_eps = clip_eps
             
-            self._old = AtariPPO(input_channels, input_height, input_width, n_outputs)
-            
+            self._old = AtariPPO(input_channels, input_height, input_width, n_outputs, cuda=cuda)
+        
+        self._cuda = cuda
+    
     def _compute_sizes(self, input_channels, input_height, input_width):
         tmp = Variable(torch.zeros((1, input_channels, input_height, input_width)), volatile=True)
         tmp = self.conv_layers(tmp)
         return tmp.view(tmp.size(0), -1).size(-1)
     
     def forward(self, x):
+        x = x.transpose(-1, 1)
         x = self.conv_layers(x)
         x = x.view(x.size(0), -1)
         return F.relu(self.fc(x))
@@ -193,15 +201,17 @@ class AtariPPO(nn.Module, BackupMixin):
     # Policy network
     def sample_action(self, state):
         state = Variable(torch.from_numpy(state).unsqueeze(0))
+        if self._cuda:
+            state = state.cuda()
+        
         logits = self.policy_fc(self(state))
-        gumbel = (logits - torch.log(-torch.log(torch.rand(logits.size()))))
-        return gumbel.max(1)[1]
+        action = F.softmax(logits).multinomial()
+        return to_numpy(action).squeeze(axis=0)
     
     def log_prob(self, action, state):
         logits = self.policy_fc(self(state))
-        # !! This looks wrong -- I think it should be:
-        #   F.log_softmax(torch.FloatTensor(logits))[state]
-        return F.log_softmax(torch.FloatTensor(logits))[state]
+        log_probs = F.log_softmax(logits)
+        return log_probs.gather(1, action)
     
     # Value network
     def predict_value(self, x):

@@ -5,6 +5,8 @@
     
     Todo:
         !! Same as in `mlp-main.py`
+        
+        !! Also need to add entropy penaly
 """
 
 from __future__ import print_function
@@ -24,7 +26,7 @@ from torch.autograd import Variable
 
 from rollouts import RolloutGenerator
 from models import AtariPPO
-from external.atari_wrappers import wrap_deepmind, FrameStack
+from external.atari_wrappers import make_atari, wrap_deepmind
 
 torch.set_default_tensor_type('torch.DoubleTensor')
 
@@ -60,6 +62,9 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=123)
     
     parser.add_argument('--rms', action="store_true")
+    
+    parser.add_argument('--cuda', action="store_true")
+    
     return parser.parse_args()
 
 # --
@@ -67,9 +72,8 @@ def parse_args():
 
 args = parse_args()
 
-env = gym.make(args.env)
-env = wrap_deepmind(env, clip_rewards=True)
-env = FrameStack(env, 4)
+env = make_atari(args.env)
+env = wrap_deepmind(env)
 
 set_seeds(args.seed)
 
@@ -81,7 +85,12 @@ ppo = AtariPPO(
     adam_lr=args.adam_lr,
     adam_eps=args.adam_eps,
     clip_eps=args.clip_eps,
+    cuda=args.cuda
 )
+print(ppo)
+
+if args.cuda:
+    ppo = ppo.cuda()
 
 roll_gen = RolloutGenerator(
     env=env,
@@ -90,6 +99,7 @@ roll_gen = RolloutGenerator(
     rms=args.rms,
     advantage_gamma=args.advantage_gamma,
     advantage_lambda=args.advantage_lambda,
+    cuda=args.cuda
 )
 
 # --

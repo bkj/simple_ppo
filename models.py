@@ -182,7 +182,7 @@ class AtariPPO(nn.Module, BackupMixin):
             
     def _compute_sizes(self, input_channels, input_height, input_width):
         tmp = Variable(torch.zeros((1, input_channels, input_height, input_width)), volatile=True)
-        tmp = conv_layers(tmp)
+        tmp = self.conv_layers(tmp)
         return tmp.view(tmp.size(0), -1).size(-1)
     
     def forward(self, x):

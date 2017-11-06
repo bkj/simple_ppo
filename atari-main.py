@@ -24,6 +24,7 @@ from torch.autograd import Variable
 
 from rollouts import RolloutGenerator
 from models import AtariPPO
+from external.atari_wrappers import wrap_deepmind, FrameStack
 
 torch.set_default_tensor_type('torch.DoubleTensor')
 
@@ -67,19 +68,19 @@ def parse_args():
 args = parse_args()
 
 env = gym.make(args.env)
+env = wrap_deepmind(env, clip_rewards=True)
+env = FrameStack(env, 4)
+
 set_seeds(args.seed)
 
 ppo = AtariPPO(
-    value=ValueMLP(
-        n_inputs=env.observation_space.shape[-1],
-    ),
-    policy=NormalPolicyMLP(
-        n_inputs=env.observation_space.shape[0],
-        n_outputs=env.action_space.shape[0],
-        adam_lr=args.adam_lr,
-        adam_eps=args.adam_eps,
-        clip_eps=args.clip_eps,
-    )
+    input_channels=env.observation_space.shape[2],
+    input_height=env.observation_space.shape[0],
+    input_width=env.observation_space.shape[1],
+    n_outputs=env.action_space.n,
+    adam_lr=args.adam_lr,
+    adam_eps=args.adam_eps,
+    clip_eps=args.clip_eps,
 )
 
 roll_gen = RolloutGenerator(
@@ -105,7 +106,7 @@ while roll_gen.step_index < args.total_steps:
     
     # --
     # Logging
-
+    
     print(json.dumps(OrderedDict([
         ("step_index",        roll_gen.step_index),
         ("batch_index",       roll_gen.batch_index),

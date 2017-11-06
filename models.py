@@ -199,6 +199,8 @@ class AtariPPO(nn.Module, BackupMixin):
     
     def log_prob(self, action, state):
         logits = self.policy_fc(self(state))
+        # !! This looks wrong -- I think it should be:
+        #   F.log_softmax(torch.FloatTensor(logits))[state]
         return F.log_softmax(torch.FloatTensor(logits))[state]
     
     # Value network

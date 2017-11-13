@@ -74,7 +74,10 @@ class RolloutGenerator(object):
             state = self.env.reset()
             # >>
             # !! ATARI
+            print(state.shape)
             state = state.astype('float') / 255 - 0.5
+            if len(state.size) == 3:
+                state = np.expand_dims(state, 1)
             # << 
             if self.rms:
                 state = self.running_stats(state)
@@ -86,6 +89,8 @@ class RolloutGenerator(object):
                 next_state, reward, is_done, _ = self.env.step(action)
                 # >>
                 next_state = state.astype('float') / 255 - 0.5
+                if len(next_state.size) == 3:
+                    next_state = np.expand_dims(next_state, 1)
                 # << 
                 if self.rms:
                     next_state = self.running_stats(next_state)

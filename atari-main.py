@@ -26,15 +26,17 @@ from torch.autograd import Variable
 
 from rollouts import RolloutGenerator
 from models import AtariPPO
+
 from external.atari_wrappers import make_atari, wrap_deepmind
+from external.subproc_vec_env import SubprocVecEnv
 
 torch.set_default_tensor_type('torch.DoubleTensor')
 
 # --
 # Helpers
 
-def set_seeds(seed):
-    _ = env.seed(seed)
+def set_seeds(subenvs, seed):
+    _ = [subenv.seed(seed + 100 * i) for i,subenv in enumerate(subenvs)]
     _ = np.random.seed(seed)
     _ = torch.manual_seed(seed)
     _ = torch.cuda.manual_seed(seed)
@@ -51,6 +53,7 @@ def parse_args():
     parser.add_argument('--steps-per-batch', type=int, default=256)
     parser.add_argument('--epochs-per-batch', type=int, default=4)
     parser.add_argument('--batch-size', type=int, default=64)
+    parser.add_argument('--num-workers', type=int, default=8)
     
     parser.add_argument('--advantage-gamma', type=float, default=0.99)
     parser.add_argument('--advantage-lambda', type=float, default=0.95)
@@ -72,11 +75,23 @@ def parse_args():
 
 args = parse_args()
 
-env = make_atari(args.env)
-env = wrap_deepmind(env)
+def make_env(env_id, seed, rank):
+    def _thunk():
+        env = make_atari(env_id)
+        env.seed(seed + rank)
+        env = wrap_deepmind(env)
+        return env
+    
+    return _thunk
 
-set_seeds(args.seed)
+print('envs')
+# env = SubprocVecEnv([
+#     make_env(args.env, args.seed, i) for i in range(2)
+# ])
+env = make_env(args.env, args.seed, 0)()
+# <<
 
+print('ppo')
 ppo = AtariPPO(
     input_channels=env.observation_space.shape[2],
     input_height=env.observation_space.shape[0],
@@ -106,12 +121,11 @@ roll_gen = RolloutGenerator(
 # Run
 
 start_time = time()
-set_seeds(args.seed)
 while roll_gen.step_index < args.total_steps:
     
     # --
     # Sample a batch of rollouts
-    
+    print('roll_gen.next()')
     roll_gen.next()
     
     # --

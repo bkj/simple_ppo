@@ -60,7 +60,10 @@ class RolloutGenerator(object):
             self.running_stats = RunningStats(ppo.policy.input_shape, clip=5.0)
         
         self.cuda = cuda
+        self.batch = []
         self.step_index = 0
+        self.batch_index = 0
+        self.episode_index = 0
         
         self._rollgen = self._make_rollgen()
     
@@ -96,16 +99,27 @@ class RolloutGenerator(object):
             
             for i in range(next_state.shape[0]):
                 episode_buffer[i].append({
-                    "state"   : state[i],
-                    "action"  : action[i],
-                    "is_done" : is_done[i],
-                    "reward"  : reward[i],
+                    "state"      : state[i],
+                    "action"     : action[i],
+                    "is_done"    : is_done[i],
+                    "reward"     : reward[i],
+                    "step_index" : self.step_index,
                 })
                 
                 if is_done[i]:
-                    yield episode_buffer[i]
+                    self.episode_index += 1
+                    
+                    episode = episode_buffer[i]
+                    for e in episode:
+                        e.update({
+                            "episode_index" : self.episode_index,
+                        })
+                    
+                    yield episode
+                    
                     del episode_buffer[i]
             
+            self.step_index += next_state.shape[0]
             state = next_state
     
     def _compute_targets(self, states, actions, is_dones, rewards):
@@ -132,12 +146,15 @@ class RolloutGenerator(object):
     
     def next(self):
         
+        self.batch_index += 1
+        
         # Run simulations
+        self.batch = []
         steps_in_batch = 0
         while steps_in_batch < self.steps_per_batch:
-            batch = self._rollgen.next()
-            steps_in_batch += len(batch)
-            self.batch.append(batch)
+            episode = next(self._rollgen)
+            steps_in_batch += len(episode)
+            self.batch.append(episode)
         
         # "Transpose" batch
         self.tbatch = {

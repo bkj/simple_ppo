@@ -11,6 +11,7 @@
 
 from __future__ import print_function
 
+import os
 import sys
 import gym
 import json
@@ -31,6 +32,8 @@ from external.atari_wrappers import make_atari, wrap_deepmind
 from external.subproc_vec_env import SubprocVecEnv
 
 torch.set_default_tensor_type('torch.DoubleTensor')
+
+from baselines.bench import Monitor
 
 # --
 # Helpers
@@ -68,7 +71,13 @@ def parse_args():
     
     parser.add_argument('--cuda', action="store_true")
     
-    return parser.parse_args()
+    args = parser.parse_args()
+    
+    if args.num_workers > 1:
+        print('scaling args.steps_per_batch by args.num_workers', file=sys.stderr)
+        args.steps_per_batch *= args.num_workers
+    
+    return args
 
 # --
 # Initialize
@@ -79,16 +88,15 @@ def make_env(env_id, seed, rank):
     def _thunk():
         env = make_atari(env_id)
         env.seed(seed + rank)
+        env = Monitor(env, os.path.join('./logs', str(rank)))
         env = wrap_deepmind(env)
         return env
     
     return _thunk
 
-print('envs')
 env = SubprocVecEnv([
-    make_env(args.env, args.seed, i) for i in range(2)
+    make_env(args.env, args.seed, i) for i in range(args.num_workers)
 ])
-# env = make_env(args.env, args.seed, 0)()
 # <<
 
 print('ppo')
@@ -125,6 +133,7 @@ while roll_gen.step_index < args.total_steps:
     
     # --
     # Sample a batch of rollouts
+    
     roll_gen.next()
     
     # --
@@ -142,7 +151,7 @@ while roll_gen.step_index < args.total_steps:
     for episode in roll_gen.batch:
         print(json.dumps(OrderedDict([
             ("step_index",     episode[0]['step_index']),
-            ("batch_index",    episode[0]['batch_index']),
+            ("batch_index",    roll_gen.batch_index),
             ("episode_index",  episode[0]['episode_index']),
             ("elapsed_time",   time() - start_time),
             ("episode_length", len(episode)),
@@ -158,4 +167,7 @@ while roll_gen.step_index < args.total_steps:
     for epoch in range(args.epochs_per_batch):
         for minibatch in roll_gen.iterate_batch(batch_size=args.batch_size, seed=(epoch, roll_gen.step_index)):
             ppo.step(**minibatch)
+    
+    print('fps=%f' % (float(roll_gen.step_index) / (time() - start_time)))
+    
 

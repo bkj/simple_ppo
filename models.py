@@ -200,25 +200,29 @@ class AtariPPO(nn.Module, BackupMixin):
     
     # Policy network
     def sample_action(self, state):
-        state = Variable(torch.from_numpy(state).unsqueeze(0))
+        # print('sample_action')
+        state = Variable(torch.from_numpy(state))
         if self._cuda:
             state = state.cuda()
         
         logits = self.policy_fc(self(state))
         action = F.softmax(logits).multinomial()
-        return to_numpy(action).squeeze(axis=0)
+        return to_numpy(action)
     
     def log_prob(self, action, state):
+        # print('log_prog')
         logits = self.policy_fc(self(state))
         log_probs = F.log_softmax(logits)
         return log_probs.gather(1, action)
     
     # Value network
     def predict_value(self, x):
+        # print('predict_value', x.size())
         return self.value_fc(self(x)).squeeze()
     
     # Shared
     def step(self, states, actions, value_targets, advantages):
+        # print('----------- step ---------------')
         self.opt.zero_grad()
         
         # Value network

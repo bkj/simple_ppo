@@ -59,65 +59,51 @@ class RolloutGenerator(object):
             self.running_stats = RunningStats(ppo.policy.input_shape, clip=5.0)
         
         self.cuda = cuda
-        
         self.step_index = 0
-        self.episode_index = 0
-        self.batch_index = 0
     
     def _do_rollout(self):
         """ yield a batch of experiences """
         
-        batch = []
+        state = self.env.reset()
+        # >>
+        # !! ATARI
+        state = state.astype('float') / 255 - 0.5
+        if len(state.shape) == 3:
+            state = np.expand_dims(state, 0)
+        # << 
+        if self.rms:
+            state = self.running_stats(state)
         
-        batch_steps = 0
-        while batch_steps < self.steps_per_batch:
-            state = self.env.reset()
+        batch = {}
+        is_done = np.array([False])
+        while (len(batch) < self.steps_per_batch) and (not is_done.any()):
+            
+            action = self.ppo.sample_action(state)
+            next_state, reward, is_done, _ = self.env.step(action)
             # >>
             # !! ATARI
-            print(state.shape)
-            state = state.astype('float') / 255 - 0.5
-            if len(state.size) == 3:
-                state = np.expand_dims(state, 1)
+            next_state = state.astype('float') / 255 - 0.5
+            if len(next_state.shape) == 3:
+                next_state = np.expand_dims(next_state, 0)
             # << 
             if self.rms:
-                state = self.running_stats(state)
+                next_state = self.running_stats(next_state)
             
-            episode = []
-            is_done = False
-            while not is_done:
-                action = self.ppo.sample_action(state)
-                next_state, reward, is_done, _ = self.env.step(action)
-                # >>
-                next_state = state.astype('float') / 255 - 0.5
-                if len(next_state.size) == 3:
-                    next_state = np.expand_dims(next_state, 1)
-                # << 
-                if self.rms:
-                    next_state = self.running_stats(next_state)
-                
-                episode.append({
-                    "state" : state,
-                    "action" : action,
-                    "is_done" : is_done,
-                    "reward" : reward,
-                    "step_index" : self.step_index,
-                    "episode_index" : self.episode_index,
-                    "batch_index" : self.batch_index,
+            for i in range(next_state.shape[0]):
+                batch[i].append({
+                    "state"   : state[i],
+                    "action"  : action[i],
+                    "is_done" : is_done[i],
+                    "reward"  : reward[i],
                 })
-                state = next_state
+            state = next_state
             
-            batch.append(episode)
-            batch_steps += len(episode)
-            self.episode_index += 1
-        
-        self.batch_index += 1
-        self.step_index += batch_steps
+            self.step_index += next_state.shape[0]
         
         return batch
     
     def _compute_targets(self, states, actions, is_dones, rewards):
         """ compute targets for value function """
-        
         value_predictions = self.ppo.predict_value(Variable(states))
         advantages = torch.Tensor(states.size(0))
         
@@ -144,11 +130,14 @@ class RolloutGenerator(object):
         
         # "Transpose" batch
         self.tbatch = {
-            "states"   : torch.from_numpy(np.vstack([[e['state'] for e in episode] for episode in self.batch])),
-            "actions"  : torch.from_numpy(np.vstack([[e['action'] for e in episode] for episode in self.batch])),
-            "is_dones" : torch.from_numpy(np.hstack([[e['is_done'] for e in episode] for episode in self.batch]).astype('int')),
-            "rewards"  : torch.from_numpy(np.hstack([[e['reward'] for e in episode] for episode in self.batch])),
+            "states"   : torch.from_numpy(np.array([b['state'] for b in self.batch])),
+            "actions"  : torch.from_numpy(np.array([b['action'] for b in self.batch])),
+            "is_dones" : torch.from_numpy(np.array([b['is_done'] for b in self.batch]).astype('int')),
+            "rewards"  : torch.from_numpy(np.array([b['reward'] for b in self.batch])),
         }
+        
+        for k in self.tbatch.keys():
+            print(k, self.tbatch[k].size())
         
         if self.cuda:
             self.tbatch = dict(zip(self.tbatch.keys(), map(lambda x: x.cuda(), self.tbatch.values())))

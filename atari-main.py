@@ -85,10 +85,10 @@ def make_env(env_id, seed, rank):
     return _thunk
 
 print('envs')
-# env = SubprocVecEnv([
-#     make_env(args.env, args.seed, i) for i in range(2)
-# ])
-env = make_env(args.env, args.seed, 0)()
+env = SubprocVecEnv([
+    make_env(args.env, args.seed, i) for i in range(2)
+])
+# env = make_env(args.env, args.seed, 0)()
 # <<
 
 print('ppo')
@@ -125,7 +125,6 @@ while roll_gen.step_index < args.total_steps:
     
     # --
     # Sample a batch of rollouts
-    print('roll_gen.next()')
     roll_gen.next()
     
     # --

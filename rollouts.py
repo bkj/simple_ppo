@@ -5,6 +5,7 @@
 """
 
 import numpy as np
+from collections import defaultdict
 
 import torch
 from torch.autograd import Variable
@@ -60,9 +61,13 @@ class RolloutGenerator(object):
         
         self.cuda = cuda
         self.step_index = 0
+        
+        self._rollgen = self._make_rollgen()
     
-    def _do_rollout(self):
+    def _make_rollgen(self):
         """ yield a batch of experiences """
+        
+        episode_buffer = defaultdict(list)
         
         state = self.env.reset()
         # >>
@@ -74,33 +79,34 @@ class RolloutGenerator(object):
         if self.rms:
             state = self.running_stats(state)
         
-        batch = {}
-        is_done = np.array([False])
-        while (len(batch) < self.steps_per_batch) and (not is_done.any()):
+        while True:
             
             action = self.ppo.sample_action(state)
             next_state, reward, is_done, _ = self.env.step(action)
+            
             # >>
             # !! ATARI
             next_state = state.astype('float') / 255 - 0.5
             if len(next_state.shape) == 3:
                 next_state = np.expand_dims(next_state, 0)
             # << 
+            
             if self.rms:
                 next_state = self.running_stats(next_state)
             
             for i in range(next_state.shape[0]):
-                batch[i].append({
+                episode_buffer[i].append({
                     "state"   : state[i],
                     "action"  : action[i],
                     "is_done" : is_done[i],
                     "reward"  : reward[i],
                 })
-            state = next_state
+                
+                if is_done[i]:
+                    yield episode_buffer[i]
+                    del episode_buffer[i]
             
-            self.step_index += next_state.shape[0]
-        
-        return batch
+            state = next_state
     
     def _compute_targets(self, states, actions, is_dones, rewards):
         """ compute targets for value function """
@@ -125,19 +131,21 @@ class RolloutGenerator(object):
         return value_targets, advantages
     
     def next(self):
+        
         # Run simulations
-        self.batch = self._do_rollout()
+        steps_in_batch = 0
+        while steps_in_batch < self.steps_per_batch:
+            batch = self._rollgen.next()
+            steps_in_batch += len(batch)
+            self.batch.append(batch)
         
         # "Transpose" batch
         self.tbatch = {
-            "states"   : torch.from_numpy(np.array([b['state'] for b in self.batch])),
-            "actions"  : torch.from_numpy(np.array([b['action'] for b in self.batch])),
-            "is_dones" : torch.from_numpy(np.array([b['is_done'] for b in self.batch]).astype('int')),
-            "rewards"  : torch.from_numpy(np.array([b['reward'] for b in self.batch])),
+            "states"   : torch.from_numpy(np.vstack([[e['state'] for e in episode] for episode in self.batch])),
+            "actions"  : torch.from_numpy(np.vstack([[e['action'] for e in episode] for episode in self.batch])),
+            "is_dones" : torch.from_numpy(np.hstack([[e['is_done'] for e in episode] for episode in self.batch]).astype('int')),
+            "rewards"  : torch.from_numpy(np.hstack([[e['reward'] for e in episode] for episode in self.batch])),
         }
-        
-        for k in self.tbatch.keys():
-            print(k, self.tbatch[k].size())
         
         if self.cuda:
             self.tbatch = dict(zip(self.tbatch.keys(), map(lambda x: x.cuda(), self.tbatch.values())))

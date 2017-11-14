@@ -10,6 +10,15 @@ from collections import defaultdict
 import torch
 from torch.autograd import Variable
 
+# def summary(x):
+#     print(x.size())
+#     print("no norm sum", x.cpu().numpy().squeeze().sum())
+#     xx = (x - x.mean()) / (x.std() + 1e-5)
+#     print("norm abs sum", (xx).abs().cpu().numpy().squeeze().sum())
+#     print("norm sq sum", (xx ** 2).cpu().numpy().squeeze().sum())
+#     print("norm sum", (xx).cpu().numpy().squeeze().sum())
+
+
 class RunningStats(object):
     def __init__(self, shape, clip=5.0, epsilon=1e-4):
         
@@ -72,8 +81,8 @@ class RolloutGenerator(object):
         
         episode_buffer = defaultdict(list)
         
-        num_workers = 8
-        steps_per_batch = 256
+        num_workers = 1
+        steps_per_batch = 64
         
         current_state = np.zeros((num_workers, 4, 84, 84))
         
@@ -85,21 +94,22 @@ class RolloutGenerator(object):
         
         # >>
         # !! ATARI
-        state = state.astype('float')
+        state = state.astype(np.float64)
         update_current_state(state)
         # << 
         
         if self.rms:
             state = self.running_stats(state)
         
-        # counter = 0
+        counter = 0
         while True:
+            counter += 1
             
             action = self.ppo.sample_action(current_state)
             next_state, reward, is_done, _ = self.env.step(action)
             # >>
             # !! ATARI
-            next_state = next_state.astype('float')
+            next_state = next_state.astype(np.float64)
             # << 
             
             if self.rms:
@@ -114,34 +124,23 @@ class RolloutGenerator(object):
                     "step_index" : self.step_index,
                 })
                 
-                if is_done[i]: # or counter == steps_per_batch:
-                    self.episode_index += 1
-                    
-                    episode = episode_buffer[i]
-                    for e in episode:
-                        e.update({
-                            "episode_index" : self.episode_index,
-                        })
-                    
-                    yield episode
-                    
-                    if is_done[i]:
-                        del episode_buffer[i]
-                        current_state[i] *= 0
+                if is_done[i]:
+                    current_state[i] *= 0
             
-            # if counter == steps_per_batch:
-            #     for i in range(next_state.shape[0]):
-            #         episode_buffer[i] = [episode_buffer[i][-1]]
-                
-            #     counter = 0
+            if counter > steps_per_batch:
+                for k,v in episode_buffer.items():
+                    yield v
+                    episode_buffer[k] = [episode_buffer[k][-1]]
+                    
+                counter = 1
             
-            # counter += 1
             self.step_index += next_state.shape[0]
             update_current_state(next_state)
     
     def _compute_targets(self, states, actions, is_dones, rewards):
         """ compute targets for value function """
         value_predictions = self.ppo.predict_value(Variable(states))
+        
         advantages = torch.Tensor(states.size(0))
         
         if self.cuda:
@@ -149,11 +148,7 @@ class RolloutGenerator(object):
             advantages = advantages.cuda()
         
         prev_advantage = 0
-        # if is_dones[-1]:
-            # prev_value = 0
-        # else:
-            # prev_value = value_predictions[-1].data.cpu().numpy()[0]
-        prev_value = 0
+        prev_value = value_predictions[-1].data.cpu().numpy()[0]
         
         for i in reversed(range(rewards.size(0) - 1)):
             nonterminal = 1 - is_dones[i]
@@ -173,6 +168,7 @@ class RolloutGenerator(object):
         steps_in_batch = 0
         while steps_in_batch < self.steps_per_batch:
             episode = next(self._rollgen)
+            print('episode', len(episode))
             steps_in_batch += len(episode)
             self.batch.append(episode)
         
@@ -184,14 +180,19 @@ class RolloutGenerator(object):
             "rewards"  : torch.from_numpy(np.hstack([[e['reward'] for e in episode] for episode in self.batch])),
         }
         
+        print("self.tbatch['states'].size()", self.tbatch['states'].size())
+        
         if self.cuda:
             self.tbatch = dict(zip(self.tbatch.keys(), map(lambda x: x.cuda(), self.tbatch.values())))
         
         # Predict value
         self.tbatch['value_targets'], self.tbatch['advantages'] = self._compute_targets(**self.tbatch)
         
-        # for k in self.tbatch.keys():
-            # self.tbatch[k] = self.tbatch[k][:-1]
+        for k in self.tbatch.keys():
+            self.tbatch[k] = self.tbatch[k][:-1]
+        
+        self.tbatch['advantages'] = (self.tbatch['advantages'] - self.tbatch['advantages'].mean()) / (self.tbatch['advantages'].std() + 1e-5)
+        
     
     def iterate_batch(self, batch_size=64, seed=0):
         if batch_size > 0:

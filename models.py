@@ -239,17 +239,13 @@ class AtariPPO(nn.Module, BackupMixin):
         old_log_prob, _ = self._old.log_prob(actions, states)
         ratio = torch.exp(log_prob - old_log_prob)
         
-        advantages_normed = (advantages - advantages.mean()) / (advantages.std() + 1e-5)
-        
-        surr1 = ratio * advantages_normed
-        surr2 = torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps) * advantages_normed
+        surr1 = ratio * advantages
+        surr2 = torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps) * advantages
         policy_surr = -torch.min(surr1, surr2).mean()
         
         # Shared
         (value_loss + policy_surr - dist_entropy * 0.01).backward()
-        # >>
-        # !! Have observed giant gradients
-        torch.nn.utils.clip_grad_norm(self.parameters(), 5)
-        # <<
+        loss = value_loss + policy_surr - dist_entropy * 0.01
+        print('loss', to_numpy(loss))
         self.opt.step()
 

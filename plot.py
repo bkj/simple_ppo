@@ -22,13 +22,15 @@ def load_data(indir='.'):
     df['timesteps'] = df.l.cumsum()
     df['timesteps'] = np.concatenate([[0], df.timesteps])[:-1]
     
-    return smooth_reward_curve(
-        np.array(df.timesteps),
-        np.array(df.r),
-    )
+    return np.array(df.timesteps), np.array(df.r.rolling(10).mean())
+    # return smooth_reward_curve(
+    #     np.array(df.timesteps),
+    #     np.array(df.r),
+    # )
 
 
 x, y = load_data('./logs')
 
 _ = plt.plot(x, y)
+_ = plt.xlim(0, 200000)
 show_plot()

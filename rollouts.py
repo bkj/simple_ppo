@@ -136,6 +136,7 @@ class RolloutGenerator(object):
             
             self.step_index += next_state.shape[0]
             update_current_state(next_state)
+            print(current_state.shape)
     
     def _compute_targets(self, states, actions, is_dones, rewards):
         """ compute targets for value function """

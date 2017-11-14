@@ -157,12 +157,9 @@ class NormalPolicyMLP(nn.Module, BackupMixin):
 class AtariPPO(nn.Module, BackupMixin):
     
     def __init__(self, input_channels, input_height, input_width, n_outputs, 
-        adam_lr=None, adam_eps=None, clip_eps=None, cuda=True):
+        entropy_penalty=0.0, adam_lr=None, adam_eps=None, clip_eps=None, cuda=True):
         
         super(AtariPPO, self).__init__()
-        
-        torch.manual_seed(123)
-        torch.cuda.manual_seed(123)
         
         self.input_shape = (input_channels, input_height, input_width)
         
@@ -184,6 +181,7 @@ class AtariPPO(nn.Module, BackupMixin):
         if adam_lr and adam_eps:
             self.opt = torch.optim.Adam(self.parameters(), lr=adam_lr, eps=adam_eps)
             self.clip_eps = clip_eps
+            self.entropy_penalty = entropy_penalty
             
             self._old = AtariPPO(input_channels, input_height, input_width, n_outputs, cuda=cuda)
         
@@ -244,8 +242,6 @@ class AtariPPO(nn.Module, BackupMixin):
         policy_surr = -torch.min(surr1, surr2).mean()
         
         # Shared
-        (value_loss + policy_surr - dist_entropy * 0.01).backward()
-        loss = value_loss + policy_surr - dist_entropy * 0.01
-        # print('loss', to_numpy(loss))
+        (value_loss + policy_surr - dist_entropy * self.entropy_penalty).backward()
         self.opt.step()
 

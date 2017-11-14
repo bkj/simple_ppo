@@ -6,6 +6,7 @@
 
 import numpy as np
 
+import torch
 from torch.autograd import Variable
 
 def to_numpy(x):
@@ -17,3 +18,8 @@ def to_numpy(x):
     
     return x.cpu().numpy() if x.is_cuda else x.numpy()
 
+
+def set_seeds(seed):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)

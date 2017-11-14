@@ -10,15 +10,6 @@ from collections import defaultdict
 import torch
 from torch.autograd import Variable
 
-# def summary(x):
-#     print(x.size())
-#     print("no norm sum", x.cpu().numpy().squeeze().sum())
-#     xx = (x - x.mean()) / (x.std() + 1e-5)
-#     print("norm abs sum", (xx).abs().cpu().numpy().squeeze().sum())
-#     print("norm sq sum", (xx ** 2).cpu().numpy().squeeze().sum())
-#     print("norm sum", (xx).cpu().numpy().squeeze().sum())
-
-
 class RunningStats(object):
     def __init__(self, shape, clip=5.0, epsilon=1e-4):
         
@@ -57,7 +48,7 @@ class RunningStats(object):
 class RolloutGenerator(object):
     
     def __init__(self, env, ppo, steps_per_batch, advantage_gamma, advantage_lambda, 
-        num_workers=1, rms=True, cuda=False):
+        num_workers=1, num_frames=4, rms=True, cuda=False):
         
         self.env = env
         self.ppo = ppo
@@ -65,12 +56,14 @@ class RolloutGenerator(object):
         self.advantage_gamma = advantage_gamma
         self.advantage_lambda = advantage_lambda
         
-        self.rms = rms
-        if rms:
-            self.running_stats = RunningStats(ppo.input_shape, clip=5.0)
+        # self.rms = rms
+        # if rms:
+        #     self.running_stats = RunningStats(ppo.input_shape, clip=5.0)
         
         self.cuda = cuda
         self.num_workers = num_workers
+        self.num_frames = num_frames
+        
         self.batch = []
         self.step_index = 0
         self.batch_index = 0
@@ -84,19 +77,14 @@ class RolloutGenerator(object):
         return current_state
     
     def _make_rollgen(self):
-        """ yield a batch of experiences """
         
         episode_buffer = defaultdict(list)
         
-        current_state = np.zeros((self.num_workers, 4, 84, 84))
+        # Stack of frames
+        current_state = np.zeros((self.num_workers, self.num_frames, 84, 84))
         
         state = self.env.reset()
-        
-        # >>
-        # !! ATARI
-        state = state.astype(np.float64)
         current_state = self._update_current_state(current_state, state)
-        # << 
         
         # if self.rms:
         #     state = self.running_stats(state)
@@ -105,10 +93,6 @@ class RolloutGenerator(object):
             
             action = self.ppo.sample_action(current_state)
             next_state, reward, is_done, _ = self.env.step(action)
-            # >>
-            # !! ATARI
-            next_state = next_state.astype(np.float64)
-            # << 
             
             # if self.rms:
             #     next_state = self.running_stats(next_state)
@@ -142,7 +126,6 @@ class RolloutGenerator(object):
         
         prev_advantage = 0
         prev_value = 0
-        
         
         for i in reversed(range(rewards.size(0))):
             nonterminal = 1 - is_dones[i]
@@ -178,10 +161,6 @@ class RolloutGenerator(object):
         
         # Predict value
         self.tbatch['value_targets'], self.tbatch['advantages'] = self._compute_targets(**self.tbatch)
-        
-        # Drop last state
-        # for k in self.tbatch.keys():
-        #     self.tbatch[k] = self.tbatch[k][:-1]
         
         # Normalize advantages
         self.tbatch['advantages'] = (self.tbatch['advantages'] - self.tbatch['advantages'].mean()) / (self.tbatch['advantages'].std() + 1e-5)

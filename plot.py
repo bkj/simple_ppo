@@ -15,7 +15,7 @@ def smooth_reward_curve(x, y):
     return xsmoo[::downsample], ysmoo[::downsample]
 
 
-def load_data(indir='.'):
+def load_data(indir='./logs'):
     infiles = glob(os.path.join(indir, '*.monitor.csv'))
     df = pd.concat([pd.read_csv(f, skiprows=1) for f in infiles], axis=0)
     df = df.sort_values('t').reset_index(drop=True)

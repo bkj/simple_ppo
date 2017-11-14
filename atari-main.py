@@ -139,6 +139,7 @@ roll_gen = RolloutGenerator(
 # Run
 
 start_time = time()
+counter = 0
 while roll_gen.step_index < args.total_steps:
     
     # --
@@ -178,4 +179,5 @@ while roll_gen.step_index < args.total_steps:
         for minibatch in roll_gen.iterate_batch(batch_size=args.batch_size, seed=(epoch, roll_gen.step_index)):
             ppo.step(**minibatch)
     
-    raise Exception
+    assert counter < 2
+    counter += 1

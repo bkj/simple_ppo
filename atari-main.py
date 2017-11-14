@@ -42,7 +42,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--env', type=str, default='PongNoFrameskip-v4')
     
-    parser.add_argument('--total-steps', type=int, default=int(100000))
+    parser.add_argument('--total-steps', type=int, default=int(1e6))
     parser.add_argument('--steps-per-batch', type=int, default=64)
     parser.add_argument('--epochs-per-batch', type=int, default=4)
     parser.add_argument('--batch-size', type=int, default=64)

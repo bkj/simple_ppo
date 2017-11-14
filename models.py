@@ -246,6 +246,6 @@ class AtariPPO(nn.Module, BackupMixin):
         # Shared
         (value_loss + policy_surr - dist_entropy * 0.01).backward()
         loss = value_loss + policy_surr - dist_entropy * 0.01
-        print('loss', to_numpy(loss))
+        # print('loss', to_numpy(loss))
         self.opt.step()
 

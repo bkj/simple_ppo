@@ -148,7 +148,6 @@ class NormalPolicyMLP(nn.Module, BackupMixin):
         
         policy_surr.backward()
         torch.nn.utils.clip_grad_norm(self.parameters(), 40)
-        
         self.opt.step()
 
 
@@ -162,6 +161,9 @@ class AtariPPO(nn.Module, BackupMixin):
         
         super(AtariPPO, self).__init__()
         
+        torch.manual_seed(123)
+        torch.cuda.manual_seed(123)
+        
         self.input_shape = (input_channels, input_height, input_width)
         
         self.conv_layers = nn.Sequential(
@@ -169,7 +171,7 @@ class AtariPPO(nn.Module, BackupMixin):
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=(4, 4), stride=(2, 2)),
             nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1)),
+            nn.Conv2d(64, 32, kernel_size=(3, 3), stride=(1, 1)),
             nn.ReLU(),
         )
         
@@ -193,36 +195,39 @@ class AtariPPO(nn.Module, BackupMixin):
         return tmp.view(tmp.size(0), -1).size(-1)
     
     def forward(self, x):
-        x = x.transpose(-1, 1)
+        x = x / 255.0
+        
         x = self.conv_layers(x)
         x = x.view(x.size(0), -1)
-        return F.relu(self.fc(x))
+        x = F.relu(self.fc(x))
+        return x
     
     # Policy network
     def sample_action(self, state):
-        # print('sample_action')
         state = Variable(torch.from_numpy(state))
         if self._cuda:
             state = state.cuda()
         
-        logits = self.policy_fc(self(state))
-        action = F.softmax(logits).multinomial()
+        policy_logits = self.policy_fc(self(state))
+        
+        probs = F.softmax(policy_logits)
+        action = probs.multinomial()
         return to_numpy(action)
     
     def log_prob(self, action, state):
-        # print('log_prog')
         logits = self.policy_fc(self(state))
         log_probs = F.log_softmax(logits)
-        return log_probs.gather(1, action)
+        action_log_probs = log_probs.gather(1, action)
+        probs = F.softmax(logits)
+        dist_entropy = -(log_probs * probs).sum(-1).mean()
+        return action_log_probs, dist_entropy
     
     # Value network
     def predict_value(self, x):
-        # print('predict_value', x.size())
         return self.value_fc(self(x)).squeeze()
     
     # Shared
     def step(self, states, actions, value_targets, advantages):
-        # print('----------- step ---------------')
         self.opt.zero_grad()
         
         # Value network
@@ -230,8 +235,8 @@ class AtariPPO(nn.Module, BackupMixin):
         value_loss = ((value_predictions - value_targets) ** 2).mean()
         
         # Policy network
-        log_prob = self.log_prob(actions, states)
-        old_log_prob = self._old.log_prob(actions, states)
+        log_prob, dist_entropy = self.log_prob(actions, states)
+        old_log_prob, _ = self._old.log_prob(actions, states)
         ratio = torch.exp(log_prob - old_log_prob)
         
         advantages_normed = (advantages - advantages.mean()) / advantages.std()
@@ -240,6 +245,6 @@ class AtariPPO(nn.Module, BackupMixin):
         policy_surr = -torch.min(surr1, surr2).mean()
         
         # Shared
-        (value_loss + policy_surr).backward()
+        (value_loss + policy_surr + dist_entropy * 0.01).backward()
         self.opt.step()
 

@@ -13,7 +13,6 @@ from __future__ import print_function
 
 import os
 import sys
-import gym
 import json
 import argparse
 import itertools
@@ -36,15 +35,6 @@ torch.set_default_tensor_type('torch.DoubleTensor')
 from baselines.bench import Monitor
 
 # --
-# Helpers
-
-def set_seeds(subenvs, seed):
-    _ = [subenv.seed(seed + 100 * i) for i,subenv in enumerate(subenvs)]
-    _ = np.random.seed(seed)
-    _ = torch.manual_seed(seed)
-    _ = torch.cuda.manual_seed(seed)
-
-# --
 # Params
 
 def parse_args():
@@ -52,8 +42,8 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--env', type=str, default='PongNoFrameskip-v4')
     
-    parser.add_argument('--total-steps', type=int, default=int(40e6))
-    parser.add_argument('--steps-per-batch', type=int, default=256)
+    parser.add_argument('--total-steps', type=int, default=int(100000))
+    parser.add_argument('--steps-per-batch', type=int, default=64)
     parser.add_argument('--epochs-per-batch', type=int, default=4)
     parser.add_argument('--batch-size', type=int, default=64)
     parser.add_argument('--num-workers', type=int, default=8)
@@ -63,7 +53,7 @@ def parse_args():
     
     parser.add_argument('--clip-eps', type=float, default=0.2)
     parser.add_argument('--adam-eps', type=float, default=1e-5)
-    parser.add_argument('--adam-lr', type=float, default=1e-3)
+    parser.add_argument('--adam-lr', type=float, default=7e-4)
     
     parser.add_argument('--seed', type=int, default=123)
     
@@ -84,26 +74,45 @@ def parse_args():
 
 args = parse_args()
 
+import gym
+from gym.spaces.box import Box
+class WrapPyTorch(gym.ObservationWrapper):
+    def __init__(self, env=None):
+        super(WrapPyTorch, self).__init__(env)
+        self.observation_space = Box(0.0, 1.0, [1, 84, 84])
+        
+    def _observation(self, observation):
+        return observation.transpose(2, 0, 1)
+
 def make_env(env_id, seed, rank):
     def _thunk():
+        
+        torch.manual_seed(123)
+        np.random.seed(123)
+        
         env = make_atari(env_id)
         env.seed(seed + rank)
         env = Monitor(env, os.path.join('./logs', str(rank)))
         env = wrap_deepmind(env)
+        env = WrapPyTorch(env)
         return env
     
     return _thunk
 
+
+np.random.seed(123)
+torch.manual_seed(123)
+torch.cuda.manual_seed(123)
+
 env = SubprocVecEnv([
     make_env(args.env, args.seed, i) for i in range(args.num_workers)
 ])
-# <<
 
 print('ppo')
 ppo = AtariPPO(
-    input_channels=env.observation_space.shape[2],
-    input_height=env.observation_space.shape[0],
-    input_width=env.observation_space.shape[1],
+    input_channels=env.observation_space.shape[0] * 4,
+    input_height=env.observation_space.shape[1],
+    input_width=env.observation_space.shape[2],
     n_outputs=env.action_space.n,
     adam_lr=args.adam_lr,
     adam_eps=args.adam_eps,
@@ -111,6 +120,7 @@ ppo = AtariPPO(
     cuda=args.cuda
 )
 print(ppo)
+
 
 if args.cuda:
     ppo = ppo.cuda()
@@ -168,6 +178,4 @@ while roll_gen.step_index < args.total_steps:
         for minibatch in roll_gen.iterate_batch(batch_size=args.batch_size, seed=(epoch, roll_gen.step_index)):
             ppo.step(**minibatch)
     
-    print('fps=%f' % (float(roll_gen.step_index) / (time() - start_time)))
-    
-
+    raise Exception

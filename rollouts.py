@@ -56,7 +56,8 @@ class RunningStats(object):
 
 class RolloutGenerator(object):
     
-    def __init__(self, env, ppo, steps_per_batch, advantage_gamma, advantage_lambda, rms=True, cuda=False):
+    def __init__(self, env, ppo, steps_per_batch, advantage_gamma, advantage_lambda, 
+        num_workers=1, rms=True, cuda=False):
         
         self.env = env
         self.ppo = ppo
@@ -69,32 +70,32 @@ class RolloutGenerator(object):
             self.running_stats = RunningStats(ppo.input_shape, clip=5.0)
         
         self.cuda = cuda
+        self.num_workers = num_workers
         self.batch = []
         self.step_index = 0
         self.batch_index = 0
         self.episode_index = 0
         
         self._rollgen = self._make_rollgen()
+        
+    def _update_current_state(self, current_state, state):
+        current_state[:, :-1] = current_state[:, 1:]
+        current_state[:, -1:] = state
+        return current_state
     
     def _make_rollgen(self):
         """ yield a batch of experiences """
         
         episode_buffer = defaultdict(list)
         
-        num_workers = 1
-        
-        current_state = np.zeros((num_workers, 4, 84, 84))
-        
-        def update_current_state(state):
-            current_state[:, :-1] = current_state[:, 1:]
-            current_state[:, -1:] = state
+        current_state = np.zeros((self.num_workers, 4, 84, 84))
         
         state = self.env.reset()
         
         # >>
         # !! ATARI
         state = state.astype(np.float64)
-        update_current_state(state)
+        current_state = self._update_current_state(current_state, state)
         # << 
         
         if self.rms:
@@ -134,7 +135,7 @@ class RolloutGenerator(object):
                 counter = 1
             
             self.step_index += next_state.shape[0]
-            update_current_state(next_state)
+            current_state = self._update_current_state(current_state, next_state)
     
     def _compute_targets(self, states, actions, is_dones, rewards):
         """ compute targets for value function """

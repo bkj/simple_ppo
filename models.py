@@ -210,15 +210,15 @@ class AtariPPO(nn.Module, BackupMixin):
         
         policy_logits = self.policy_fc(self(state))
         
-        probs = F.softmax(policy_logits)
+        probs = F.softmax(policy_logits, dim=1)
         action = probs.multinomial()
         return to_numpy(action)
     
     def log_prob(self, action, state):
         logits = self.policy_fc(self(state))
-        log_probs = F.log_softmax(logits)
+        log_probs = F.log_softmax(logits, dim=1)
         action_log_probs = log_probs.gather(1, action)
-        probs = F.softmax(logits)
+        probs = F.softmax(logits, dim=1)
         dist_entropy = -(log_probs * probs).sum(-1).mean()
         return action_log_probs, dist_entropy
     

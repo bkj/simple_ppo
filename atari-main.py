@@ -61,13 +61,7 @@ def parse_args():
     
     parser.add_argument('--cuda', action="store_true")
     
-    args = parser.parse_args()
-    
-    if args.num_workers > 1:
-        print('scaling args.steps_per_batch by args.num_workers', file=sys.stderr)
-        args.steps_per_batch *= args.num_workers
-    
-    return args
+    return parser.parse_args()
 
 # --
 # Initialize
@@ -132,7 +126,8 @@ roll_gen = RolloutGenerator(
     rms=args.rms,
     advantage_gamma=args.advantage_gamma,
     advantage_lambda=args.advantage_lambda,
-    cuda=args.cuda
+    cuda=args.cuda,
+    num_workers=args.num_workers,
 )
 
 # --

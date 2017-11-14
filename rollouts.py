@@ -72,8 +72,8 @@ class RolloutGenerator(object):
         
         episode_buffer = defaultdict(list)
         
-        num_workers = 1
-        steps_per_batch = 64
+        num_workers = 8
+        steps_per_batch = 256
         
         current_state = np.zeros((num_workers, 4, 84, 84))
         
@@ -82,8 +82,6 @@ class RolloutGenerator(object):
             current_state[:, -1:] = state
         
         state = self.env.reset()
-        # print('obs.shape', state.shape)
-        # print('obs.sum()', state.sum())
         
         # >>
         # !! ATARI
@@ -94,10 +92,9 @@ class RolloutGenerator(object):
         if self.rms:
             state = self.running_stats(state)
         
-        counter = 0
+        # counter = 0
         while True:
             
-            # print('rollgen')
             action = self.ppo.sample_action(current_state)
             next_state, reward, is_done, _ = self.env.step(action)
             # >>
@@ -117,7 +114,7 @@ class RolloutGenerator(object):
                     "step_index" : self.step_index,
                 })
                 
-                if is_done[i] or counter == steps_per_batch:
+                if is_done[i]: # or counter == steps_per_batch:
                     self.episode_index += 1
                     
                     episode = episode_buffer[i]
@@ -131,14 +128,16 @@ class RolloutGenerator(object):
                     if is_done[i]:
                         del episode_buffer[i]
                         current_state[i] *= 0
-                    
-                    if counter == steps_per_batch:
-                        counter = 0
             
-            counter += 1
+            # if counter == steps_per_batch:
+            #     for i in range(next_state.shape[0]):
+            #         episode_buffer[i] = [episode_buffer[i][-1]]
+                
+            #     counter = 0
+            
+            # counter += 1
             self.step_index += next_state.shape[0]
             update_current_state(next_state)
-            print('current_state.sum()', current_state.sum(axis=-1).sum(axis=-1))
     
     def _compute_targets(self, states, actions, is_dones, rewards):
         """ compute targets for value function """
@@ -150,19 +149,13 @@ class RolloutGenerator(object):
             advantages = advantages.cuda()
         
         prev_advantage = 0
-        if is_dones[-1]:
-            prev_value = 0
-        else:
-            prev_value = value_predictions[-1].data.cpu().numpy()[0]
+        # if is_dones[-1]:
+            # prev_value = 0
+        # else:
+            # prev_value = value_predictions[-1].data.cpu().numpy()[0]
+        prev_value = 0
         
         for i in reversed(range(rewards.size(0) - 1)):
-            
-            print(
-                rewards[i],
-                prev_value,
-                value_predictions[i].data.cpu()[0],
-            )
-            
             nonterminal = 1 - is_dones[i]
             delta = rewards[i] + self.advantage_gamma * prev_value * nonterminal - value_predictions.data[i]
             advantages[i] = delta + self.advantage_gamma * self.advantage_lambda * prev_advantage * nonterminal
@@ -170,7 +163,7 @@ class RolloutGenerator(object):
             prev_advantage = advantages[i]
         
         value_targets = advantages + value_predictions.data
-        return value_targets, advantages
+        return value_targets, advantages.view(-1, 1)
     
     def next(self):
         
@@ -197,20 +190,18 @@ class RolloutGenerator(object):
         # Predict value
         self.tbatch['value_targets'], self.tbatch['advantages'] = self._compute_targets(**self.tbatch)
         
-        for k in self.tbatch.keys():
-            self.tbatch[k] = self.tbatch[k][:-1]
-        
-        print('advantages', self.tbatch['advantages'])
+        # for k in self.tbatch.keys():
+            # self.tbatch[k] = self.tbatch[k][:-1]
     
     def iterate_batch(self, batch_size=64, seed=0):
         if batch_size > 0:
-            idx = torch.LongTensor(np.random.RandomState(seed).permutation(self.n_steps))
+            idx = np.random.RandomState(seed).permutation(self.n_steps)
+            idx = np.sort(idx)
+            idx = torch.LongTensor(idx)
             if self.cuda:
                 idx = idx.cuda()
             
             for chunk in torch.chunk(idx, idx.size(0) // batch_size):
-                print('chunk.size()', chunk.size())
-                print('state sum', self.tbatch['states'][chunk].sum())
                 yield {
                     "states" : Variable(self.tbatch['states'][chunk]),
                     "actions" : Variable(self.tbatch['actions'][chunk]),

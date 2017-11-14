@@ -178,6 +178,3 @@ while roll_gen.step_index < args.total_steps:
     for epoch in range(args.epochs_per_batch):
         for minibatch in roll_gen.iterate_batch(batch_size=args.batch_size, seed=(epoch, roll_gen.step_index)):
             ppo.step(**minibatch)
-    
-    assert counter < 2
-    counter += 1

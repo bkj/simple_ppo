@@ -247,6 +247,9 @@ class AtariPPO(nn.Module, BackupMixin):
         
         # Shared
         (value_loss + policy_surr - dist_entropy * 0.01).backward()
-        loss = value_loss + policy_surr - dist_entropy * 0.01
+        # >>
+        # !! Have observed giant gradients
+        torch.nn.utils.clip_grad_norm(self.parameters(), 5)
+        # <<
         self.opt.step()
 

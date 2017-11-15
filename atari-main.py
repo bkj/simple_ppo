@@ -160,5 +160,5 @@ while roll_gen.step_index < args.total_steps:
     
     ppo.backup()
     for epoch in range(args.epochs_per_batch):
-        for minibatch in roll_gen.iterate_batch(batch_size=args.batch_size, seed=(epoch, roll_gen.step_index)):
+        for minibatch in roll_gen.iterate_batch(batch_size=args.batch_size * args.num_workers, seed=(epoch, roll_gen.step_index)):
             ppo.step(**minibatch)

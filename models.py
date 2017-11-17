@@ -228,12 +228,17 @@ class AtariPPO(nn.Module, BackupMixin):
         ratio = torch.exp(log_prob - old_log_prob)
         surr1 = ratio * advantages
         surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * advantages
-        policy_surr = -torch.min(surr1, surr2).mean()
+        policy_loss = -torch.min(surr1, surr2).mean()
         
         value_loss = ((value_targets - value_predictions) ** 2).mean()
         
         self.opt.zero_grad()
-        loss = (value_loss + policy_surr - dist_entropy * self.entropy_penalty)
+        loss = (value_loss + policy_loss - dist_entropy * self.entropy_penalty)
         loss.backward()
         self.opt.step()
+        return {
+            "value_loss" : float(value_loss.data[0]),
+            "policy_loss" : float(policy_loss.data[0]),
+            "dist_entropy" : float(dist_entropy.data[0]),
+        }
 

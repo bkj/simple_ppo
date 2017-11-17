@@ -100,9 +100,9 @@ class RolloutGenerator(object):
             for i in range(next_state.shape[0]):
                 episode_buffer[i].append({
                     "state"      : current_state[i].copy(),
-                    "action"     : action[i],
-                    "is_done"    : is_done[i],
-                    "reward"     : reward[i],
+                    "action"     : action[i].copy(),
+                    "is_done"    : is_done[i].copy(),
+                    "reward"     : reward[i].copy(),
                     "step_index" : self.step_index,
                 })
                 
@@ -124,15 +124,15 @@ class RolloutGenerator(object):
             value_predictions = value_predictions.cuda()
             advantages = advantages.cuda()
         
-        prev_advantage = 0
-        prev_value = 0
+        next_advantage = 0
+        next_value = 0
         
         for i in reversed(range(rewards.size(0))):
             nonterminal = 1 - is_dones[i]
-            delta = rewards[i] + self.advantage_gamma * prev_value * nonterminal - value_predictions.data[i]
-            advantages[i] = delta + self.advantage_gamma * self.advantage_lambda * prev_advantage * nonterminal
-            prev_value = value_predictions.data[i]
-            prev_advantage = advantages[i]
+            delta = rewards[i] + self.advantage_gamma * next_value * nonterminal - value_predictions.data[i]
+            advantages[i] = delta + self.advantage_gamma * self.advantage_lambda * next_advantage * nonterminal
+            next_value = value_predictions.data[i]
+            next_advantage = advantages[i]
         
         value_targets = advantages + value_predictions.data
         return value_targets, advantages.view(-1, 1)

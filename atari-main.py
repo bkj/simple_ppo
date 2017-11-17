@@ -77,10 +77,6 @@ class WrapPyTorch(gym.ObservationWrapper):
 
 def make_env(env_id, seed, rank):
     def _thunk():
-        
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        
         env = make_atari(env_id)
         env.seed(seed + rank)
         env = Monitor(env, os.path.join('./logs', str(rank)))

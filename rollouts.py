@@ -56,10 +56,6 @@ class RolloutGenerator(object):
         self.advantage_gamma = advantage_gamma
         self.advantage_lambda = advantage_lambda
         
-        # self.rms = rms
-        # if rms:
-        #     self.running_stats = RunningStats(ppo.input_shape, clip=5.0)
-        
         self.cuda = cuda
         self.num_workers = num_workers
         self.num_frames = num_frames
@@ -86,16 +82,11 @@ class RolloutGenerator(object):
         state = self.env.reset()
         current_state = self._update_current_state(current_state, state)
         
-        # if self.rms:
-        #     state = self.running_stats(state)
-        
+        counter = 0
         while True:
             
             action = self.ppo.sample_action(current_state)
             next_state, reward, is_done, _ = self.env.step(action)
-            
-            # if self.rms:
-            #     next_state = self.running_stats(next_state)
             
             for i in range(next_state.shape[0]):
                 episode_buffer[i].append({
@@ -108,8 +99,15 @@ class RolloutGenerator(object):
                 
                 if is_done[i]:
                     current_state[i] *= 0
-                    yield episode_buffer[i]
-                    episode_buffer[i] = []
+                    # yield episode_buffer[i]
+                    # episode_buffer[i] = []
+            
+            if counter > self.steps_per_batch:
+                yield episode_buffer.values()
+                for k,v in episode_buffer.items():
+                    episode_buffer[k] = [v[-1]]
+                
+                counter = 1
             
             self.step_index += next_state.shape[0]
             current_state = self._update_current_state(current_state, next_state)
@@ -125,7 +123,8 @@ class RolloutGenerator(object):
             advantages = advantages.cuda()
         
         next_advantage = 0
-        next_value = 0
+        # next_value = 0
+        next_value = value_predictions[-1].data.cpu().numpy()[0]
         
         for i in reversed(range(rewards.size(0))):
             nonterminal = 1 - is_dones[i]
@@ -139,14 +138,15 @@ class RolloutGenerator(object):
     
     def next(self):
         
-        # Run simulations
+        # # Run simulations
         self.batch_index += 1
-        self.batch = []
-        steps_in_batch = 0
-        while steps_in_batch < self.steps_per_batch * self.num_workers:
-            episode = next(self._rollgen)
-            steps_in_batch += len(episode)
-            self.batch.append(episode)
+        # self.batch = []
+        # steps_in_batch = 0
+        # while steps_in_batch < self.steps_per_batch * self.num_workers:
+        #     episode = next(self._rollgen)
+        #     steps_in_batch += len(episode)
+        #     self.batch.append(episode)
+        self.batch = next(self._rollgen)
         
         # "Transpose" batch
         self.tbatch = {
@@ -161,6 +161,8 @@ class RolloutGenerator(object):
         
         # Predict value
         self.tbatch['value_targets'], self.tbatch['advantages'] = self._compute_targets(**self.tbatch)
+        
+        self.tbatch = dict(zip(self.tbatch.keys(), map(lambda x: x[:-1], self.tbatch.values())))
         
         # Normalize advantages
         self.tbatch['advantages'] = (self.tbatch['advantages'] - self.tbatch['advantages'].mean()) / (self.tbatch['advantages'].std() + 1e-5)

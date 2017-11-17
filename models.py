@@ -194,56 +194,46 @@ class AtariPPO(nn.Module, BackupMixin):
     
     def forward(self, x):
         x = x / 255.0
-        
         x = self.conv_layers(x)
         x = x.view(x.size(0), -1)
         x = F.relu(self.fc(x))
-        return x
+        return self.policy_fc(x), self.value_fc(x)
     
-    # Policy network
-    def sample_action(self, state):
-        state = Variable(torch.from_numpy(state))
+    def sample_actions(self, states):
+        states = Variable(torch.from_numpy(states))
         if self._cuda:
-            state = state.cuda()
+            states = states.cuda()
         
-        policy_logits = self.policy_fc(self(state))
+        policy, value_predictions = self(states)
         
-        probs = F.softmax(policy_logits, dim=1)
+        probs = F.softmax(policy, dim=1)
         action = probs.multinomial()
-        return to_numpy(action)
+        return to_numpy(action), to_numpy(value_predictions)
     
-    def log_prob(self, action, state):
-        logits = self.policy_fc(self(state))
-        log_probs = F.log_softmax(logits, dim=1)
-        action_log_probs = log_probs.gather(1, action)
-        probs = F.softmax(logits, dim=1)
+    def evaluate_actions(self, states, actions):
+        policy, value_predictions = self(states)
+        
+        log_probs = F.log_softmax(policy, dim=1)
+        action_log_probs = log_probs.gather(1, actions)
+        probs = F.softmax(policy, dim=1)
         dist_entropy = -(log_probs * probs).sum(-1).mean()
-        return action_log_probs, dist_entropy
+        
+        return value_predictions, action_log_probs, dist_entropy
     
-    # Value network
-    def predict_value(self, x):
-        return self.value_fc(self(x))
-    
-    # Shared
     def step(self, states, actions, value_targets, advantages):
         
-        # Value network
-        value_predictions = self.predict_value(states)
-        value_loss = ((value_predictions - value_targets) ** 2).mean()
+        value_predictions, log_prob, dist_entropy = self.evaluate_actions(states, actions)
+        _, old_log_prob, _ = self._old.evaluate_actions(states, actions)
         
-        # Policy network
-        log_prob, dist_entropy = self.log_prob(actions, states)
-        old_log_prob, _ = self._old.log_prob(actions, states)
         ratio = torch.exp(log_prob - old_log_prob)
-        
         surr1 = ratio * advantages
-        surr2 = torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps) * advantages
+        surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * advantages
         policy_surr = -torch.min(surr1, surr2).mean()
         
-        # Shared
+        value_loss = ((value_targets - value_predictions) ** 2).mean()
+        
         self.opt.zero_grad()
         loss = (value_loss + policy_surr - dist_entropy * self.entropy_penalty)
         loss.backward()
-        torch.nn.utils.clip_grad_norm(self.parameters(), 40)
         self.opt.step()
 

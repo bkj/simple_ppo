@@ -74,99 +74,93 @@ class RolloutGenerator(object):
     
     def _make_rollgen(self):
         
-        episode_buffer = defaultdict(list)
-        
         # Stack of frames
         current_state = np.zeros((self.num_workers, self.num_frames, 84, 84))
-        
         state = self.env.reset()
         current_state = self._update_current_state(current_state, state)
         
-        counter = 0
+        episode_buffer = defaultdict(list)
+        episode_buffer['state']   = np.zeros((self.steps_per_batch + 1, *current_state.shape))
+        episode_buffer['action']  = np.zeros((self.steps_per_batch + 1, self.num_workers, 1)).astype(int)
+        episode_buffer['is_done'] = np.zeros((self.steps_per_batch + 1, self.num_workers, 1)).astype(int)
+        episode_buffer['reward']  = np.zeros((self.steps_per_batch + 1, self.num_workers, 1))
+        
         while True:
-            
-            action = self.ppo.sample_action(current_state)
-            next_state, reward, is_done, _ = self.env.step(action)
-            
-            for i in range(next_state.shape[0]):
-                episode_buffer[i].append({
-                    "state"      : current_state[i].copy(),
-                    "action"     : action[i].copy(),
-                    "is_done"    : is_done[i].copy(),
-                    "reward"     : reward[i].copy(),
-                    "step_index" : self.step_index,
-                })
+            for step in range(self.steps_per_batch):
+                action = self.ppo.sample_action(current_state)
+                next_state, reward, is_done, _ = self.env.step(action)
                 
-                if is_done[i]:
-                    current_state[i] *= 0
-                    # yield episode_buffer[i]
-                    # episode_buffer[i] = []
-            
-            if counter > self.steps_per_batch:
-                yield episode_buffer.values()
-                for k,v in episode_buffer.items():
-                    episode_buffer[k] = [v[-1]]
+                episode_buffer['state'][step]   = current_state.copy()
+                episode_buffer['action'][step]  = action.copy().reshape(-1, 1)
+                episode_buffer['is_done'][step] = is_done.copy().reshape(-1, 1)
+                episode_buffer['reward'][step]  = reward.copy().reshape(-1, 1)
                 
-                counter = 1
+                current_state *= (1 - is_done).reshape(-1, 1, 1, 1)
+                current_state = self._update_current_state(current_state, next_state)
+                
+                self.step_index += self.num_workers
             
-            self.step_index += next_state.shape[0]
-            current_state = self._update_current_state(current_state, next_state)
+            yield episode_buffer, current_state
     
-    def _compute_targets(self, states, actions, is_dones, rewards):
+    def _compute_targets(self, states, actions, is_dones, rewards, current_state):
         """ compute targets for value function """
-        value_predictions = self.ppo.predict_value(Variable(states))
         
-        advantages = torch.Tensor(states.size(0))
+        flat_states = Variable(states, volatile=True).view(-1, self.num_frames, 84, 84)
+        value_predictions = self.ppo.predict_value(flat_states)
+        value_predictions = value_predictions.view(states.size(0), states.size(1), 1).data
         
+        advantages = torch.Tensor(states.size(0), states.size(1))
         if self.cuda:
-            value_predictions = value_predictions.cuda()
             advantages = advantages.cuda()
         
         next_advantage = 0
-        # next_value = 0
-        next_value = value_predictions[-1].data.cpu().numpy()[0]
+        next_value = self.ppo.predict_value(Variable(current_state, volatile=True)).data.view(-1, 1)
         
         for i in reversed(range(rewards.size(0))):
-            nonterminal = 1 - is_dones[i]
-            delta = rewards[i] + self.advantage_gamma * next_value * nonterminal - value_predictions.data[i]
+            nonterminal = (1 - is_dones[i]).double()
+            delta = rewards[i] + self.advantage_gamma * next_value * nonterminal - value_predictions[i]
             advantages[i] = delta + self.advantage_gamma * self.advantage_lambda * next_advantage * nonterminal
-            next_value = value_predictions.data[i]
-            next_advantage = advantages[i]
+            next_value = value_predictions[i].view(-1, 1)
+            next_advantage = advantages[i].view(-1, 1)
         
-        value_targets = advantages + value_predictions.data
-        return value_targets, advantages.view(-1, 1)
+        value_targets = advantages + value_predictions
+        return value_targets, advantages
     
     def next(self):
         
         # # Run simulations
         self.batch_index += 1
-        # self.batch = []
-        # steps_in_batch = 0
-        # while steps_in_batch < self.steps_per_batch * self.num_workers:
-        #     episode = next(self._rollgen)
-        #     steps_in_batch += len(episode)
-        #     self.batch.append(episode)
-        self.batch = next(self._rollgen)
+        self.batch, current_state = next(self._rollgen)
         
         # "Transpose" batch
-        self.tbatch = {
-            "states"   : torch.from_numpy(np.vstack([[e['state'] for e in episode] for episode in self.batch])),
-            "actions"  : torch.from_numpy(np.vstack([[e['action'] for e in episode] for episode in self.batch])),
-            "is_dones" : torch.from_numpy(np.hstack([[e['is_done'] for e in episode] for episode in self.batch]).astype('int')),
-            "rewards"  : torch.from_numpy(np.hstack([[e['reward'] for e in episode] for episode in self.batch])),
+        self.batch = {
+            "states"        : torch.Tensor(self.batch['state']),
+            "actions"       : torch.LongTensor(self.batch['action']),
+            "is_dones"      : torch.LongTensor(self.batch['is_done']),
+            "rewards"       : torch.Tensor(self.batch['reward']),
+            "current_state" : torch.Tensor(current_state),
         }
         
         if self.cuda:
-            self.tbatch = dict(zip(self.tbatch.keys(), map(lambda x: x.cuda(), self.tbatch.values())))
+            self.batch = dict(zip(self.batch.keys(), map(lambda x: x.cuda(), self.batch.values())))
         
         # Predict value
-        self.tbatch['value_targets'], self.tbatch['advantages'] = self._compute_targets(**self.tbatch)
-        
-        self.tbatch = dict(zip(self.tbatch.keys(), map(lambda x: x[:-1], self.tbatch.values())))
+        self.batch['value_targets'], self.batch['advantages'] = self._compute_targets(**self.batch)
         
         # Normalize advantages
-        self.tbatch['advantages'] = (self.tbatch['advantages'] - self.tbatch['advantages'].mean()) / (self.tbatch['advantages'].std() + 1e-5)
-    
+        self.batch['advantages'] = (self.batch['advantages'] - self.batch['advantages'].mean()) / (self.batch['advantages'].std() + 1e-5)
+        
+        self.batch = {
+            "states"        : self.batch['states'].view(-1, self.num_frames, 84, 84),
+            "actions"       : self.batch['actions'].view(-1, 1),
+            "is_dones"      : self.batch['is_dones'].view(-1, 1),
+            "rewards"       : self.batch['rewards'].view(-1, 1),
+            "current_state" : self.batch['current_state'].view(-1, 1),
+            "advantages"    : self.batch['advantages'].view(-1, 1),
+            "value_targets" : self.batch['value_targets'].view(-1, 1),
+        }
+        
+        
     def iterate_batch(self, batch_size=64, seed=0):
         if batch_size > 0:
             idx = torch.LongTensor(np.random.RandomState(seed).permutation(self.n_steps))
@@ -175,27 +169,28 @@ class RolloutGenerator(object):
             
             for chunk in torch.chunk(idx, idx.size(0) // batch_size):
                 yield {
-                    "states" : Variable(self.tbatch['states'][chunk]),
-                    "actions" : Variable(self.tbatch['actions'][chunk]),
-                    "advantages" : Variable(self.tbatch['advantages'][chunk]),
-                    "value_targets" : Variable(self.tbatch['value_targets'][chunk]),
+                    "states" : Variable(self.batch['states'][chunk]),
+                    "actions" : Variable(self.batch['actions'][chunk]),
+                    "advantages" : Variable(self.batch['advantages'][chunk]),
+                    "value_targets" : Variable(self.batch['value_targets'][chunk]),
                 }
         else:
             yield {
-                "states" : Variable(self.tbatch['states']),
-                "actions" : Variable(self.tbatch['actions']),
-                "advantages" : Variable(self.tbatch['advantages']),
-                "value_targets" : Variable(self.tbatch['value_targets']),
+                "states" : Variable(self.batch['states']),
+                "actions" : Variable(self.batch['actions']),
+                "advantages" : Variable(self.batch['advantages']),
+                "value_targets" : Variable(self.batch['value_targets']),
             }
     
     @property
     def episodes_in_batch(self):
-        return self.tbatch['is_dones'].sum()
-    
+        return self.batch['is_dones'].sum()
+        
     @property
     def total_reward(self):
-        return self.tbatch['rewards'].sum()
+        return self.batch['rewards'].sum()
     
     @property
     def n_steps(self):
-        return self.tbatch['states'].size(0)
+        return self.batch['states'].size(0)
+    

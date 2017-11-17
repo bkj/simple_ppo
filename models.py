@@ -222,14 +222,13 @@ class AtariPPO(nn.Module, BackupMixin):
     
     # Value network
     def predict_value(self, x):
-        return self.value_fc(self(x)).squeeze()
+        return self.value_fc(self(x))
     
     # Shared
     def step(self, states, actions, value_targets, advantages):
-        self.opt.zero_grad()
         
         # Value network
-        value_predictions = self.predict_value(states).squeeze()
+        value_predictions = self.predict_value(states)
         value_loss = ((value_predictions - value_targets) ** 2).mean()
         
         # Policy network
@@ -242,6 +241,9 @@ class AtariPPO(nn.Module, BackupMixin):
         policy_surr = -torch.min(surr1, surr2).mean()
         
         # Shared
-        (value_loss + policy_surr - dist_entropy * self.entropy_penalty).backward()
+        self.opt.zero_grad()
+        loss = (value_loss + policy_surr - dist_entropy * self.entropy_penalty)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm(self.parameters(), 40)
         self.opt.step()
 

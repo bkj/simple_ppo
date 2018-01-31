@@ -1,4 +1,6 @@
 import os
+import argparse
+
 import numpy as np
 import pandas as pd
 from glob import glob
@@ -16,16 +18,20 @@ def load_data(indir='./logs'):
     
     return np.array(df.timesteps), np.array(df.r.rolling(10).mean())
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--n', type=int, default=-1)
+    return parser.parse_args()
+
 # --
 
-x, y = load_data('./logs')
-sel = x < 1.5e6
-_ = plt.plot(x[sel], y[sel])
+args = parse_args()
 
-xlim = x.max()
+N = args.n if args.n > 0 else float('inf')
 
-x, y = load_data('/tmp/gym')
-sel = x < 1.5e6
-_ = plt.plot(x[sel], y[sel])
+for p in ['./logs', './logs-1', './logs-0', '/tmp/gym']:
+    x, y = load_data(p)
+    sel = x < N
+    _ = plt.plot(x[sel], y[sel], alpha=0.5)
 
 show_plot()

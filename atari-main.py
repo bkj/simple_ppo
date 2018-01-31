@@ -136,8 +136,9 @@ while roll_gen.step_index < args.total_steps:
         ("step_index",        roll_gen.step_index),
         ("batch_index",       roll_gen.batch_index),
         ("elapsed_time",      time() - start_time),
-        ("avg_reward",        roll_gen.total_reward / roll_gen.episodes_in_batch),
-    ])), file=sys.stderr)
+        ("episodes_in_batch", roll_gen.episodes_in_batch),
+        ("total_reward",      roll_gen.total_reward),
+    ])))
     
     for episode in roll_gen.batch:
         print(json.dumps(OrderedDict([

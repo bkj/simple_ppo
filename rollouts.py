@@ -52,7 +52,7 @@ class RunningStats(object):
 class RolloutGenerator(object):
     """ Specialized for Atari """
     def __init__(self, env, ppo, steps_per_batch, advantage_gamma, advantage_lambda, 
-        num_workers=1, num_frames=4, rms=True, cuda=False, mode='lever'):
+        num_workers=1, num_frames=4, rms=True, cuda=False, mode='lever', action_dim=1):
         
         self.env = env
         self.ppo = ppo
@@ -64,6 +64,7 @@ class RolloutGenerator(object):
         self.num_workers = num_workers
         self.num_frames = num_frames
         self.mode = mode
+        self.action_dim = action_dim
         
         self.batch = []
         self.step_index = 0
@@ -89,19 +90,21 @@ class RolloutGenerator(object):
         
         episode_buffer = defaultdict(list)
         episode_buffer['states']   = np.zeros((self.steps_per_batch, *current_state.shape))
-        episode_buffer['actions']  = np.zeros((self.steps_per_batch, self.num_workers, 1)).astype(int)
+        episode_buffer['actions']  = np.zeros((self.steps_per_batch, self.num_workers, self.action_dim)).astype(int)
         episode_buffer['values']   = np.zeros((self.steps_per_batch, self.num_workers, 1))
         episode_buffer['is_dones'] = np.zeros((self.steps_per_batch, self.num_workers, 1)).astype(int)
         episode_buffer['rewards']  = np.zeros((self.steps_per_batch, self.num_workers, 1))
         
         while True:
             for step in range(self.steps_per_batch):
+                print('sample_actions')
                 action, value = self.ppo.sample_actions(current_state)
+                print('sample_actions done')
                 
                 next_state, reward, is_done, _ = self.env.step(action)
                 
                 episode_buffer['states'][step]   = current_state.copy()
-                episode_buffer['actions'][step]  = action.copy().reshape(-1, 1)
+                episode_buffer['actions'][step]  = action.copy().reshape(-1, self.action_dim)
                 episode_buffer['values'][step]   = value.copy().reshape(-1, 1)
                 episode_buffer['is_dones'][step] = is_done.copy().reshape(-1, 1)
                 episode_buffer['rewards'][step]  = reward.copy().reshape(-1, 1)
@@ -110,6 +113,7 @@ class RolloutGenerator(object):
                     current_state *= (1 - is_done).reshape(-1, 1, 1, 1)
                     current_state = self._update_current_state(current_state, next_state)
                 else:
+                    current_state = next_state.copy()
                     current_state *= 1 - is_done
                 
                 self.step_index += self.num_workers
@@ -120,7 +124,7 @@ class RolloutGenerator(object):
         """ compute targets for value function """
         
         next_advantage = 0
-        advantages = torch.Tensor(states.size(0), states.size(1), 1)
+        advantages = torch.FloatTensor(states.size(0), states.size(1), 1)
         if self.cuda:
             advantages = advantages.cuda()
         
@@ -128,7 +132,7 @@ class RolloutGenerator(object):
         next_value = next_value.data.view(-1, 1)
         
         for i in reversed(range(rewards.size(0))):
-            nonterminal = (1 - is_dones[i]).double()
+            nonterminal = (1 - is_dones[i]).float()
             delta = rewards[i] + self.advantage_gamma * next_value * nonterminal - values[i]
             advantages[i] = delta + self.advantage_gamma * self.advantage_lambda * next_advantage * nonterminal
             next_value = values[i].view(-1, 1)
@@ -145,13 +149,13 @@ class RolloutGenerator(object):
         
         # "Transpose" batch
         self.batch = {
-            "states"   : torch.Tensor(self.batch['states']),
-            "values"   : torch.Tensor(self.batch['values']),
+            "states"   : torch.FloatTensor(self.batch['states']),
+            "values"   : torch.FloatTensor(self.batch['values']),
             "actions"  : torch.LongTensor(self.batch['actions']),
             "is_dones" : torch.LongTensor(self.batch['is_dones']),
-            "rewards"  : torch.Tensor(self.batch['rewards']),
+            "rewards"  : torch.FloatTensor(self.batch['rewards']),
             
-            "current_state" : torch.Tensor(current_state),
+            "current_state" : torch.FloatTensor(current_state),
         }
         
         if self.cuda:
@@ -166,7 +170,7 @@ class RolloutGenerator(object):
         self.batch = {
             "states" : stack0(self.batch['states']),
             
-            "actions"       : self.batch['actions'].view(-1, 1),
+            "actions"       : self.batch['actions'].view(-1, self.action_dim),
             "is_dones"      : self.batch['is_dones'].view(-1, 1),
             "rewards"       : self.batch['rewards'].view(-1, 1),
             

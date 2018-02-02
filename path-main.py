@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-    atari-main.py
+    path-main.py
 """
 
 from __future__ import print_function
@@ -22,15 +22,14 @@ from torch.autograd import Variable
 import gym
 from gym.spaces.box import Box
 
-from models import AtariPPO
+from models import PathPPO
 from rollouts import RolloutGenerator
 from external.monitor import Monitor
-from external.atari_wrappers import make_atari, wrap_deepmind
 from external.subproc_vec_env import SubprocVecEnv
 
 from helpers import set_seeds
 
-torch.set_default_tensor_type('torch.DoubleTensor')
+torch.set_default_tensor_type('torch.DoubleTensor') # Necessary?
 
 # --
 # Params
@@ -65,37 +64,35 @@ def parse_args():
 # --
 # Initialize
 
-args = parse_args()
-
-
-class WrapPyTorch(gym.ObservationWrapper):
-    def __init__(self, env=None):
-        super(WrapPyTorch, self).__init__(env)
-        self.observation_space = Box(0.0, 1.0, [1, 84, 84], dtype=np.float32) # Dimension of Atari input
-        
-    def _observation(self, observation):
-        return observation.transpose(2, 0, 1).astype(np.float64)
-
-def make_env(env_id, seed, rank):
-    def _thunk():
-        env = make_atari(env_id)
-        env.seed(seed + rank)
-        env = Monitor(env, os.path.join(args.log_dir, str(rank)))
-        env = wrap_deepmind(env)
-        env = WrapPyTorch(env)
-        return env
+class SimpleEnv(object):
+    def __init__(self, n_levers=4, seed=123):
+        self._payouts = np.arange(n_levers)
+        self._counter = 0
     
-    return _thunk
+    def reset(self):
+        return np.random.normal(0, 1, 32)
+    
+    def step(self, action):
+        if self._counter % 5000 == 0:
+            print('------------- reverse -------------')
+            self._payouts = self._payouts[::-1]
+        
+        self._counter += 1
+        payout = self._payouts[action.squeeze()].sum()
+        is_done = self._counter % 10 == 0
+        state = np.random.normal(0, 1, 32)
+        return np.array([state]), np.array([payout]), np.array([is_done]), None
+
+
+args = parse_args()
 
 set_seeds(args.seed)
 
-env = SubprocVecEnv([make_env(args.env, args.seed, i) for i in range(args.num_workers)])
+env = SubprocVecEnv([SimpleEnv for i in range(args.num_workers)])
 
-ppo = AtariPPO(
-    input_channels=env.observation_space.shape[0] * args.num_frames,
-    input_height=env.observation_space.shape[1],
-    input_width=env.observation_space.shape[2],
-    n_outputs=env.action_space.n,
+
+ppo = PathPPO(
+    n_outputs=4,
     adam_lr=args.adam_lr,
     adam_eps=args.adam_eps,
     entropy_penalty=args.entropy_penalty,
@@ -117,8 +114,9 @@ roll_gen = RolloutGenerator(
     cuda=args.cuda,
     num_workers=args.num_workers,
     num_frames=args.num_frames,
-    mode='atari'
 )
+
+roll_gen.next()
 
 # --
 # Run
@@ -131,23 +129,25 @@ while roll_gen.step_index < args.total_steps:
     
     roll_gen.next()
     
+    print(np.bincount(roll_gen.batch['actions'].cpu().numpy().ravel(), minlength=4))
+    
     # --
     # Logging
     
-    print(json.dumps(OrderedDict([
-        ("step_index",        roll_gen.step_index),
-        ("batch_index",       roll_gen.batch_index),
-        ("elapsed_time",      time() - start_time),
-        ("episodes_in_batch", roll_gen.episodes_in_batch),
-        ("total_reward",      roll_gen.total_reward),
-    ])))
+    # print(json.dumps(OrderedDict([
+    #     ("step_index",        roll_gen.step_index),
+    #     ("batch_index",       roll_gen.batch_index),
+    #     ("elapsed_time",      time() - start_time),
+    #     ("episodes_in_batch", roll_gen.episodes_in_batch),
+    #     ("total_reward",      roll_gen.total_reward),
+    # ])))
     
-    for episode in roll_gen.batch:
-        print(json.dumps(OrderedDict([
-            ("step_index",     roll_gen.step_index),
-            ("batch_index",    roll_gen.batch_index),
-            ("elapsed_time",   time() - start_time),
-        ])))
+    # for episode in roll_gen.batch:
+    #     print(json.dumps(OrderedDict([
+    #         ("step_index",     roll_gen.step_index),
+    #         ("batch_index",    roll_gen.batch_index),
+    #         ("elapsed_time",   time() - start_time),
+    #     ])))
     
     sys.stdout.flush()
     
@@ -158,4 +158,4 @@ while roll_gen.step_index < args.total_steps:
     for epoch in range(args.epochs_per_batch):
         for minibatch in roll_gen.iterate_batch(batch_size=args.batch_size * args.num_workers, seed=(epoch, roll_gen.step_index)):
             losses = ppo.step(**minibatch)
-            print(json.dumps(losses))
+            # print(json.dumps(losses))

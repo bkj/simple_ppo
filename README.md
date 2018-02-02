@@ -10,4 +10,23 @@ Implementation of PPO in `pytorch`.
 
 ### Requirements
 
-Requires `pytorch` +  `openai/gym` w/ `mujoco`.
+Requires `pytorch` + `openai/gym` (w/ `mujoco`, for continuous control experiments).
+
+### Installation
+
+```
+conda create --yes -n simple_ppo_env python=3.6 anaconda
+source activate simple_ppo_env
+
+# Install pytorch
+conda install -y pytorch torchvision -c pytorch
+
+# Install openai gym
+pip install gym
+conda install -y -c conda-forge opencv 
+
+```
+
+### Usage
+
+See `run.sh` for usage.

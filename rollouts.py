@@ -10,6 +10,10 @@ from collections import defaultdict
 import torch
 from torch.autograd import Variable
 
+def stack0(x):
+    shp = x.shape
+    return x.view((shp[0] * shp[1],) + tuple(shp[2:]) )
+
 class RunningStats(object):
     def __init__(self, shape, clip=5.0, epsilon=1e-4):
         
@@ -46,9 +50,9 @@ class RunningStats(object):
 # Environment
 
 class RolloutGenerator(object):
-    
+    """ Specialized for Atari """
     def __init__(self, env, ppo, steps_per_batch, advantage_gamma, advantage_lambda, 
-        num_workers=1, num_frames=4, rms=True, cuda=False):
+        num_workers=1, num_frames=4, rms=True, cuda=False, mode='lever'):
         
         self.env = env
         self.ppo = ppo
@@ -59,6 +63,7 @@ class RolloutGenerator(object):
         self.cuda = cuda
         self.num_workers = num_workers
         self.num_frames = num_frames
+        self.mode = mode
         
         self.batch = []
         self.step_index = 0
@@ -75,9 +80,12 @@ class RolloutGenerator(object):
     def _make_rollgen(self):
         
         # Stack of frames
-        current_state = np.zeros((self.num_workers, self.num_frames, 84, 84))
-        state = self.env.reset()
-        current_state = self._update_current_state(current_state, state)
+        if self.mode == 'atari':
+            current_state = np.zeros((self.num_workers, self.num_frames, 84, 84))
+            state = self.env.reset()
+            current_state = self._update_current_state(current_state, state)
+        else:
+            current_state = self.env.reset()
         
         episode_buffer = defaultdict(list)
         episode_buffer['states']   = np.zeros((self.steps_per_batch, *current_state.shape))
@@ -89,6 +97,7 @@ class RolloutGenerator(object):
         while True:
             for step in range(self.steps_per_batch):
                 action, value = self.ppo.sample_actions(current_state)
+                
                 next_state, reward, is_done, _ = self.env.step(action)
                 
                 episode_buffer['states'][step]   = current_state.copy()
@@ -97,8 +106,11 @@ class RolloutGenerator(object):
                 episode_buffer['is_dones'][step] = is_done.copy().reshape(-1, 1)
                 episode_buffer['rewards'][step]  = reward.copy().reshape(-1, 1)
                 
-                current_state *= (1 - is_done).reshape(-1, 1, 1, 1)
-                current_state = self._update_current_state(current_state, next_state)
+                if self.mode == 'atari':
+                    current_state *= (1 - is_done).reshape(-1, 1, 1, 1)
+                    current_state = self._update_current_state(current_state, next_state)
+                else:
+                    current_state *= 1 - is_done
                 
                 self.step_index += self.num_workers
             
@@ -152,7 +164,8 @@ class RolloutGenerator(object):
         self.batch['advantages'] = (self.batch['advantages'] - self.batch['advantages'].mean()) / (self.batch['advantages'].std() + 1e-5)
         
         self.batch = {
-            "states"        : self.batch['states'].view(-1, self.num_frames, 84, 84),
+            "states" : stack0(self.batch['states']),
+            
             "actions"       : self.batch['actions'].view(-1, 1),
             "is_dones"      : self.batch['is_dones'].view(-1, 1),
             "rewards"       : self.batch['rewards'].view(-1, 1),
@@ -161,8 +174,7 @@ class RolloutGenerator(object):
             "advantages"    : self.batch['advantages'].view(-1, 1),
             "value_targets" : self.batch['value_targets'].view(-1, 1),
         }
-        
-        
+    
     def iterate_batch(self, batch_size=64, seed=0):
         idx = torch.LongTensor(np.random.RandomState(seed).permutation(self.n_steps))
         if self.cuda:

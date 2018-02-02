@@ -242,3 +242,78 @@ class AtariPPO(nn.Module, BackupMixin):
             "dist_entropy" : float(dist_entropy.data[0]),
         }
 
+# --
+# Path PPO
+
+class PathPPO(nn.Module, BackupMixin):
+    # !! This takes a single output !!
+    
+    def __init__(self, n_inputs=32, n_outputs=4, 
+        entropy_penalty=0.0, adam_lr=None, adam_eps=None, clip_eps=None, cuda=True):
+        
+        super(PathPPO, self).__init__()
+        
+        self.trunk = nn.Sequential(
+            nn.Linear(n_inputs, 32),
+            nn.Linear(32, 64),
+        )
+        
+        self.policy_fc = nn.Linear(64, n_outputs)
+        self.value_fc = nn.Linear(64, 1)
+        
+        if adam_lr and adam_eps:
+            self.opt = torch.optim.Adam(self.parameters(), lr=adam_lr, eps=adam_eps)
+            self.clip_eps = clip_eps
+            self.entropy_penalty = entropy_penalty
+            
+            self._old = PathPPO(n_inputs, n_outputs, cuda=cuda)
+        
+        self._cuda = cuda
+    
+    def forward(self, x):
+        x = self.trunk(x)
+        return self.policy_fc(x), self.value_fc(x)
+    
+    def sample_actions(self, states):
+        states = Variable(torch.from_numpy(states))
+        if self._cuda:
+            states = states.cuda()
+        
+        policy, value_predictions = self(states)
+        
+        probs = F.softmax(policy, dim=1)
+        action = probs.multinomial()
+        return to_numpy(action), to_numpy(value_predictions)
+    
+    def evaluate_actions(self, states, actions):
+        policy, value_predictions = self(states)
+        
+        log_probs = F.log_softmax(policy, dim=1)
+        action_log_probs = log_probs.gather(1, actions)
+        probs = F.softmax(policy, dim=1)
+        dist_entropy = -(log_probs * probs).sum(-1).mean()
+        
+        return value_predictions, action_log_probs, dist_entropy
+    
+    def step(self, states, actions, value_targets, advantages):
+        
+        value_predictions, log_prob, dist_entropy = self.evaluate_actions(states, actions)
+        _, old_log_prob, _ = self._old.evaluate_actions(states, actions)
+        
+        ratio = torch.exp(log_prob - old_log_prob)
+        surr1 = ratio * advantages
+        surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * advantages
+        policy_loss = -torch.min(surr1, surr2).mean()
+        
+        value_loss = ((value_targets - value_predictions) ** 2).mean()
+        
+        self.opt.zero_grad()
+        loss = (value_loss + policy_loss - dist_entropy * self.entropy_penalty)
+        loss.backward()
+        self.opt.step()
+        return {
+            "value_loss" : float(value_loss.data[0]),
+            "policy_loss" : float(policy_loss.data[0]),
+            "dist_entropy" : float(dist_entropy.data[0]),
+        }
+

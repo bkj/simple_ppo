@@ -16,7 +16,7 @@ def load_data(indir='./logs'):
     df['timesteps'] = df.l.cumsum()
     df['timesteps'] = np.concatenate([[0], df.timesteps])[:-1]
     
-    return np.array(df.timesteps), np.array(df.r.rolling(10).mean())
+    return np.array(df.timesteps), np.array(df.r.rolling(100).mean())
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -29,7 +29,8 @@ args = parse_args()
 
 N = args.n if args.n > 0 else float('inf')
 
-for p in ['./logs', './logs-1', './logs-0', '/tmp/gym']:
+for p in ['logs', '/tmp/gym']:
+# for p in ['logs/space']:
     x, y = load_data(p)
     sel = x < N
     _ = plt.plot(x[sel], y[sel], alpha=0.5)

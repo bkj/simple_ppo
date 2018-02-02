@@ -6,6 +6,7 @@
     !! From `openai/baselines`
 """
 
+import sys
 import numpy as np
 from multiprocessing import Process, Pipe
 
@@ -29,7 +30,11 @@ def worker(remote, parent_remote, env_fn_wrapper):
             remote.close()
             break
         elif cmd == 'get_spaces':
-            remote.send((env.action_space, env.observation_space))
+            try:
+                remote.send((env.action_space, env.observation_space))
+            except:
+                print('SubprocVecEnv: cannot get action_space or observation_space', file=sys.stderr)
+                remote.send((None, None))
         else:
             raise NotImplementedError
 

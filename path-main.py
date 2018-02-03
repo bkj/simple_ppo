@@ -82,7 +82,7 @@ class SimpleEnv(object):
     
     def step(self, action):
         
-        if self._counter % 5000 == 0:
+        if (self._counter + 1) % 5000 == 0:
             print('reversal')
             self._payouts = self._payouts[::-1]
         
@@ -90,7 +90,7 @@ class SimpleEnv(object):
         self._counts += (action == 1)
         
         payout = 0
-        if action.sum() > 0:
+        if (action == 1).sum() > 0:
             active = self._payouts[action == 1]
             payout = np.max(active) - action.sum()
         

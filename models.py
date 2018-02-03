@@ -214,6 +214,10 @@ class SoftmaxPPO(JointPPO):
 
 
 class MultiSoftmaxPPO(JointPPO):
+    def __init__(self, output_channels=None, **kwargs):
+        super(MultiSoftmaxPPO, self).__init__(**kwargs)
+        self.output_channels = output_channels
+        
     def sample_actions(self, states):
         states = Variable(torch.FloatTensor(states))
         if self._cuda:
@@ -222,7 +226,7 @@ class MultiSoftmaxPPO(JointPPO):
         policy, value_predictions = self(states)
         
         # Sample action
-        probs = F.softmax(policy.view(-1, 2), dim=1)
+        probs = F.softmax(policy.view(-1, self.output_channels), dim=1)
         action = probs.multinomial()
         action = action.view(policy.shape[0], -1)
         
@@ -233,12 +237,12 @@ class MultiSoftmaxPPO(JointPPO):
         policy, value_predictions = self(states)
         
         # Compute log prob of actions
-        log_probs = F.log_softmax(policy.view(-1, 2), dim=1)
+        log_probs = F.log_softmax(policy.view(-1, self.output_channels), dim=1)
         action_log_probs = log_probs.gather(1, actions.view(-1, 1))
         action_log_probs = action_log_probs.view(policy.shape[0], -1)
         
         # Compute entropy
-        probs = F.softmax(policy.view(-1, 2), dim=1)
+        probs = F.softmax(policy.view(-1, self.output_channels), dim=1)
         dist_entropy = -(log_probs * probs).view(policy.shape[0], -1).sum(dim=-1).mean()
         
         return value_predictions, action_log_probs, dist_entropy
@@ -293,19 +297,19 @@ class MultiSoftmaxPPO(JointPPO):
 # Path PPO
 
 class SinglePathPPO(MultiSoftmaxPPO):
-    def __init__(self, n_inputs=32, n_outputs=4, 
+    def __init__(self, n_inputs=32, n_outputs=4, output_channels=2,
         entropy_penalty=0.0, adam_lr=None, adam_eps=None, clip_eps=None, cuda=True):
         
-        super(SinglePathPPO, self).__init__()
+        super(SinglePathPPO, self).__init__(output_channels=output_channels)
         
-        self.trunk = nn.Sequential(
+        self.layers = nn.Sequential(
             nn.Linear(n_inputs, 64),
             nn.ReLU(),
             nn.Linear(64, 64),
             nn.ReLU(),
         )
         
-        self.policy_fc = nn.Linear(64, n_outputs * 2)
+        self.policy_fc = nn.Linear(64, n_outputs * output_channels)
         self.value_fc = nn.Linear(64, 1)
         
         if adam_lr and adam_eps:
@@ -318,7 +322,7 @@ class SinglePathPPO(MultiSoftmaxPPO):
         self._cuda = cuda
     
     def forward(self, x):
-        x = self.trunk(x)
+        x = self.layers(x)
         return self.policy_fc(x), self.value_fc(x)
 
 

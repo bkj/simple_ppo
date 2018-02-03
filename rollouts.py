@@ -97,9 +97,7 @@ class RolloutGenerator(object):
         
         while True:
             for step in range(self.steps_per_batch):
-                print('sample_actions')
                 action, value = self.ppo.sample_actions(current_state)
-                print('sample_actions done')
                 
                 next_state, reward, is_done, _ = self.env.step(action)
                 

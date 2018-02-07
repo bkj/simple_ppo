@@ -50,7 +50,6 @@ class RunningStats(object):
 # Environment
 
 class RolloutGenerator(object):
-    """ Specialized for Atari """
     def __init__(self, env, ppo, steps_per_batch, advantage_gamma, advantage_lambda, 
         num_workers=1, num_frames=4, rms=True, cuda=False, mode='lever', action_dim=1):
         
@@ -182,7 +181,7 @@ class RolloutGenerator(object):
         if self.cuda:
             idx = idx.cuda()
         
-        for chunk in torch.chunk(idx, idx.size(0) // batch_size):
+        for chunk in torch.chunk(idx, idx.shape[0] // batch_size):
             yield {
                 "states" : Variable(self.batch['states'][chunk]),
                 "actions" : Variable(self.batch['actions'][chunk]),
@@ -200,5 +199,5 @@ class RolloutGenerator(object):
     
     @property
     def n_steps(self):
-        return self.batch['states'].size(0)
+        return self.batch['states'].shape[0]
     

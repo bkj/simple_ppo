@@ -22,11 +22,11 @@ from torch.autograd import Variable
 import gym
 from gym.spaces.box import Box
 
-from models.path import SinglePathPPO
 from rollouts import RolloutGenerator
 from external.monitor import Monitor
 from external.subproc_vec_env import SubprocVecEnv
 
+from models.path import SinglePathPPO
 from models.helpers import set_seeds
 
 from rsub import *
@@ -90,7 +90,8 @@ class SimpleEnv(object):
         payout = 0
         if (action == 1).sum() > 0:
             active = self._payouts[action == 1]
-            payout = np.max(active) - action.sum()
+            # payout = np.max(active) - action.sum()
+            payout = active.min()
         
         # payout = action
         is_done = self._counter % 10 == 0

@@ -19,8 +19,6 @@ class JointPPO(nn.Module, BackupMixin):
     def step(self, states, actions, value_targets, advantages):
         
         value_predictions, action_log_probs, dist_entropy = self.evaluate_actions(states, actions)
-        print('value_predictions.shape', value_predictions.shape)
-        print('action_log_probs.shape', action_log_probs.shape)
         
         _, old_action_log_probs, _ = self._old.evaluate_actions(states, actions)
         

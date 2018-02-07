@@ -12,36 +12,44 @@ from models.joint import JointPPO
 
 class LSTMSoftmaxPPO(JointPPO):
     
-    emb_dim     = 64
-    lstm_dim    = 128
-    num_layers  = 1
-    temperature = 100
+    # n_inputs        -> state dimension
+    # n_outputs       -> number of steps
+    # output_channels -> cardinality of each choice
+    # temperature     -> higher means more variance in samples
+    # n_layers        -> number of LSTM layers
     
     def __init__(self, n_inputs=32, n_outputs=4, output_channels=10,
+        temperature=1, n_layers=1, emb_dim=8, lstm_dim=8,
         entropy_penalty=0.0, adam_lr=None, adam_eps=None, clip_eps=None, cuda=True):
         
         super(LSTMSoftmaxPPO, self).__init__()
         
-        # n_inputs        -> state dimension
-        # n_outputs       -> number of steps
-        # output_channels -> cardinality of each choice
         
-        self.n_outputs = n_outputs
+        self.emb  = nn.Embedding(output_channels, emb_dim)
+        self.lstm = nn.LSTM(emb_dim, lstm_dim, num_layers=n_layers)
         
-        self.emb  = nn.Embedding(output_channels, self.emb_dim)
-        self.lstm = nn.LSTM(self.emb_dim, self.lstm_dim, num_layers=self.num_layers)
-        
-        self.policy_fc = nn.Linear(self.lstm_dim, output_channels)
-        self.value_fc = nn.Linear(self.lstm_dim, 1)
+        self.policy_fc = nn.Linear(lstm_dim, output_channels)
+        self.value_fc = nn.Linear(lstm_dim, 1)
         
         if adam_lr and adam_eps:
             self.opt = torch.optim.Adam(self.parameters(), lr=adam_lr, eps=adam_eps)
             self.clip_eps = clip_eps
             self.entropy_penalty = entropy_penalty
             
-            self._old = LSTMSoftmaxPPO(n_inputs, n_outputs, cuda=cuda)
+            self._old = LSTMSoftmaxPPO(
+                n_inputs=n_inputs,
+                n_outputs=n_outputs,
+                output_channels=output_channels,
+                temperature=temperature,
+                cuda=cuda
+            )
         
         self._cuda = cuda
+        
+        self.n_outputs   = n_outputs
+        self.temperature = temperature
+        self.lstm_dim    = lstm_dim
+        self.n_layers  = n_layers
     
     def _lstm_forward(self, x, inner):
         e = self.emb(x)
@@ -50,18 +58,22 @@ class LSTMSoftmaxPPO(JointPPO):
         lstm_out = lstm_out.squeeze(0)
         return lstm_out, inner
     
+    def forward(self, x):
+        # DUMMY
+        return None, Variable(torch.zeros(x.shape[0]))
+    
     def sample_actions(self, states):
         # !! The dimensions here are tricky
         
         inner = (
-            Variable(torch.zeros(self.num_layers, states.shape[0], self.lstm_dim)),
-            Variable(torch.zeros(self.num_layers, states.shape[0], self.lstm_dim)),
+            Variable(torch.zeros(self.n_layers, states.shape[0], self.lstm_dim)),
+            Variable(torch.zeros(self.n_layers, states.shape[0], self.lstm_dim)),
         )
         
         all_actions = [
             Variable(torch.LongTensor([0] * states.shape[0]))
         ]
-        for i in range(self.n_outputs):
+        for i in range(self.n_outputs - 1):
             
             # Run LSTM cell
             lstm_out, inner = self._lstm_forward(all_actions[-1], inner)
@@ -84,8 +96,8 @@ class LSTMSoftmaxPPO(JointPPO):
         # !! The dimensions here are tricky
         
         inner = (
-            Variable(torch.zeros(self.num_layers, states.shape[0], self.lstm_dim)),
-            Variable(torch.zeros(self.num_layers, states.shape[0], self.lstm_dim)),
+            Variable(torch.zeros(self.n_layers, states.shape[0], self.lstm_dim)),
+            Variable(torch.zeros(self.n_layers, states.shape[0], self.lstm_dim)),
         )
         
         all_action_log_probs = []

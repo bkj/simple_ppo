@@ -22,14 +22,12 @@ from torch.autograd import Variable
 import gym
 from gym.spaces.box import Box
 
-from models import SinglePathPPO
+from models.path import SinglePathPPO
 from rollouts import RolloutGenerator
 from external.monitor import Monitor
 from external.subproc_vec_env import SubprocVecEnv
 
-from helpers import set_seeds
-
-# torch.set_default_tensor_type('torch.DoubleTensor') # Necessary?
+from models.helpers import set_seeds
 
 from rsub import *
 from matplotlib import pyplot as plt

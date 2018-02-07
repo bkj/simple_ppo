@@ -12,15 +12,19 @@ from torch.nn import Parameter
 from torch.nn import functional as F
 from torch.autograd import Variable
 
-from helpers import to_numpy, BackupMixin
+from .helpers import to_numpy, BackupMixin
+
 
 class JointPPO(nn.Module, BackupMixin):
     def step(self, states, actions, value_targets, advantages):
         
-        value_predictions, log_prob, dist_entropy = self.evaluate_actions(states, actions)
-        _, old_log_prob, _ = self._old.evaluate_actions(states, actions)
+        value_predictions, action_log_probs, dist_entropy = self.evaluate_actions(states, actions)
+        print('value_predictions.shape', value_predictions.shape)
+        print('action_log_probs.shape', action_log_probs.shape)
         
-        ratio = torch.exp(log_prob - old_log_prob)
+        _, old_action_log_probs, _ = self._old.evaluate_actions(states, actions)
+        
+        ratio = torch.exp(action_log_probs - old_action_log_probs)
         surr1 = ratio * advantages
         surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * advantages
         policy_loss = -torch.min(surr1, surr2).mean()
@@ -40,7 +44,6 @@ class JointPPO(nn.Module, BackupMixin):
 
 class SoftmaxPPO(JointPPO):
     def sample_actions(self, states):
-        # print('--- sample_actions ---')
         states = Variable(torch.FloatTensor(states))
         if self._cuda:
             states = states.cuda()
@@ -86,7 +89,7 @@ class MultiSoftmaxPPO(JointPPO):
         policy, value_predictions = self(states)
         
         # Sample action
-        probs = F.softmax(policy.view(-1, self.output_channels), dim=1)
+        probs  = F.softmax(policy.view(-1, self.output_channels), dim=1)
         action = probs.multinomial()
         action = action.view(policy.shape[0], -1)
         

@@ -22,11 +22,11 @@ from torch.autograd import Variable
 import gym
 from gym.spaces.box import Box
 
+from models.lstm_ppo import LSTMSoftmaxPPO
 from rollouts import RolloutGenerator
 from external.monitor import Monitor
 from external.subproc_vec_env import SubprocVecEnv
 
-from models.path import SinglePathPPO
 from models.helpers import set_seeds
 
 from rsub import *
@@ -62,10 +62,10 @@ def parse_args():
     
     return parser.parse_args()
 
+
 # --
 # Initialize
 
-# softmax
 N = 6
 class SimpleEnv(object):
     def __init__(self, n_levers=N, seed=123):
@@ -80,6 +80,7 @@ class SimpleEnv(object):
         return np.zeros(32)
     
     def step(self, action):
+        # print(action)
         
         if (self._counter + 1) % 5000 == 0:
             print('reversal')
@@ -113,7 +114,7 @@ set_seeds(args.seed)
 env = SubprocVecEnv([f(seed=i) for i in range(args.num_workers)])
 
 
-ppo = SinglePathPPO(
+ppo = LSTMSoftmaxPPO(
     n_outputs=N,
     adam_lr=args.adam_lr,
     adam_eps=args.adam_eps,

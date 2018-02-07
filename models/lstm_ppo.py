@@ -1,3 +1,9 @@
+#!/usr/bin/env python
+
+"""
+    models/lstm_ppo.py
+"""
+
 import numpy as np
 
 import torch
@@ -5,8 +11,8 @@ from torch import nn
 from torch.autograd import Variable
 from torch.nn import functional as F
 
-from models.helpers import to_numpy
-from models.joint import JointPPO
+from .helpers import to_numpy
+from .joint import JointPPO
 
 # --
 
@@ -18,7 +24,7 @@ class LSTMSoftmaxPPO(JointPPO):
     # temperature     -> higher means more variance in samples
     # n_layers        -> number of LSTM layers
     
-    def __init__(self, n_inputs=32, n_outputs=4, output_channels=10,
+    def __init__(self, n_inputs=32, n_outputs=4, output_channels=2,
         temperature=1, n_layers=1, emb_dim=8, lstm_dim=8,
         entropy_penalty=0.0, adam_lr=None, adam_eps=None, clip_eps=None, cuda=True):
         

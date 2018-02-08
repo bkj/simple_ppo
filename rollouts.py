@@ -181,6 +181,8 @@ class RolloutGenerator(object):
         if self.cuda:
             idx = idx.cuda()
         
+        assert batch_size < idx.shape[0], "batch_size < idx.shape[0]"
+        
         for chunk in torch.chunk(idx, idx.shape[0] // batch_size):
             yield {
                 "states" : Variable(self.batch['states'][chunk]),
